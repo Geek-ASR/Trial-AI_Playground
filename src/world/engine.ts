@@ -1,35 +1,59 @@
 import * as THREE from 'three';
+import { audio, type Material } from '../audio/audio';
 import { LESSON_BY_ID, REALM_BY_ID } from '../curriculum';
 import type { RealmId } from '../curriculum/types';
+import { AmbientLife } from '../render/ambient';
+import { Avatar } from '../render/avatar';
+import { Clouds } from '../render/clouds';
+import { BeamField, PortalRing } from '../render/effects';
+import { createCutoutDepthMaterial, createSharedUniforms, createVoxelMaterial, createWaterMaterial, type SharedUniforms } from '../render/materials';
+import { firework, ParticleSystem } from '../render/particles';
+import { PostFX } from '../render/post';
+import { guessQuality, onSettings, PRESETS, QUALITY_ORDER, settings, updateSettings, type QualityLevel, type Settings } from '../render/settings';
+import { SkySystem } from '../render/sky';
+import { Weather, type WeatherKind } from '../render/weather';
+import { FLOCK_CONSOLE } from '../sims/geometry';
+import type { FrameInfo, Interactable, SimContext, SimSystem } from '../sims/sim';
 import { B, BLOCKS, type BlockId } from './blocks';
+import { ChunkRenderer } from './chunks';
 import { makeLabel, updateLabel } from './labels';
 import {
-  CHUNK, GROUND, HUB, HUB_PORTALS, HUB_SPAWN, PAD_HALF, REALM_RADIUS, REALM_SITES, SITE_BY_REALM, STATIONS, SX, SZ,
-  type Station,
+  GROUND, HUB, HUB_PORTALS, HUB_SPAWN, LAB_RADIUS, LAB_SITES, PAD_HALF, REALM_RADIUS, REALM_SITES, SITE_BY_REALM,
+  STATIONS, SX, SZ, type LabKind,
 } from './layout';
-import { meshChunk } from './mesher';
 import type { VoxelOp } from './ops';
 import { Player, type MoveInput } from './player';
 import { createAtlas, tileIcon } from './textures';
 import { World } from './world';
 
-const SKY = new THREE.Color('#9fd3ff');
-const SAVE_KEY = 'nc.world.v1';
+const SAVE_KEY = 'nc.world.v2';
 const REACH = 7;
 
-export const HOTBAR: BlockId[] = [B.GRASS, B.STONE, B.PLANKS, B.BRICK, B.GLASS, B.CRYSTAL, B.GOLD, B.BLUE, B.RED];
+export const HOTBAR: BlockId[] = [B.GRASS, B.STONE, B.PLANKS, B.BRICK, B.GLASS, B.LAMP, B.CRYSTAL, B.GOLD, B.CHERRY_LEAVES];
 
-export type Place = RealmId | 'hub' | 'wilds';
+export type Place = RealmId | LabKind | 'hub' | 'wilds';
+
+export const LAB_NAMES: Record<LabKind, string> = {
+  valley: 'Gradient Descent Valley',
+  galton: 'The Galton Board',
+  kmeans: 'K-Means Nebula',
+  cathedral: 'The Neural Cathedral',
+  galaxy: 'Embedding Galaxy',
+  maze: 'Q-Learning Maze',
+};
 
 interface EngineEvents {
-  near: (s: Station | null) => void;
-  interact: (s: Station) => void;
+  near: (s: Interactable | null) => void;
+  interact: (s: Interactable) => void;
   lock: (locked: boolean) => void;
   place: (p: Place) => void;
   hotbar: (i: number) => void;
-  loading: (done: number, total: number) => void;
   fly: (on: boolean) => void;
   builder: () => void;
+  guide: () => void;
+  photo: () => void;
+  quality: (level: QualityLevel, auto: boolean) => void;
+  weather: (kind: WeatherKind) => void;
 }
 
 interface QueuedOp {
@@ -45,81 +69,152 @@ export class Engine {
   readonly player: Player;
   readonly atlas: HTMLCanvasElement;
   readonly input: MoveInput = { forward: 0, strafe: 0, jump: false, descend: false, sprint: false };
-  hotbarIndex = 0;
   readonly hotbar = HOTBAR;
-  private icons = new Map<number, string>();
+  hotbarIndex = 0;
+  readonly renderer: THREE.WebGLRenderer;
+  readonly scene = new THREE.Scene();
+  readonly camera = new THREE.PerspectiveCamera(74, 1, 0.1, 2400);
+  readonly shared: SharedUniforms = createSharedUniforms();
+  readonly sky: SkySystem;
+  readonly weather: Weather;
+  readonly glow: ParticleSystem;
+  readonly solid: ParticleSystem;
+  readonly interactables: Interactable[] = [];
+  readonly systems: SimSystem[] = [];
+  /** While set, drives the camera each frame (the cinematic tour). Return false when finished. */
+  cinematic: ((dt: number, cam: THREE.PerspectiveCamera) => boolean) | null = null;
+  cameraMode: 'first' | 'third' = 'first';
+  quality: QualityLevel = 'medium';
+  fps = 60;
 
-  private renderer: THREE.WebGLRenderer;
-  private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(72, 1, 0.1, 420);
-  private materials: Record<'opaque' | 'cutout' | 'translucent', THREE.Material>;
-  private chunks = new Map<number, THREE.Mesh[]>();
-  private pendingChunks: [number, number][] = [];
-  private totalChunks = 0;
-  private queue: QueuedOp[] = [];
-  private padCells = new Map<RealmId, Set<number>>();
+  private atlasTexture: THREE.Texture;
+  readonly post: PostFX;
+  private clouds = new Clouds();
+  private ambient: AmbientLife;
+  private beams!: BeamField;
+  private portals: PortalRing[] = [];
+  private avatar = new Avatar();
+  private chunks!: ChunkRenderer;
   private highlight: THREE.LineSegments;
-  private clouds: THREE.Mesh;
   private labels = new Map<string, THREE.Sprite>();
   private listeners: { [K in keyof EngineEvents]?: EngineEvents[K][] } = {};
   private keys = new Set<string>();
   private running = false;
+  private ready = false;
   private last = 0;
-  private nearStation: Station | null = null;
+  private time = 0;
+  private near: Interactable | null = null;
   private portalTimer = 0;
   private portalCooldown = 0;
   private currentPlace: Place = 'hub';
   private saveTimer = -2;
-  private cloudDrift = 0;
+  private queue: QueuedOp[] = [];
+  private padCells = new Map<RealmId, Set<number>>();
   private lastBuild: { x: number; y: number; z: number; prev: BlockId }[] = [];
   private raf = 0;
-  private isDone: (lessonId: string) => boolean;
   private lastSpace = 0;
+  private icons = new Map<number, string>();
+  private fovNow = 74;
+  private bob = 0;
+  private dip = 0;
+  private lastStride = 0;
+  private wasInWater = false;
+  private pointerDown = -1;
+  private ambTimer = 0;
+  private fpsFrames = 0;
+  private fpsTime = 0;
+  private fpsLow = 0;
+  private autoQuality = true;
+  private thirdDist = 4.2;
+  private unsubSettings: () => void;
+  private readonly ctx: SimContext;
+  private underwater = false;
 
-  constructor(private container: HTMLElement, isDone: (lessonId: string) => boolean) {
-    this.isDone = isDone;
+  static async create(container: HTMLElement, isDone: (lessonId: string) => boolean, onProgress: (label: string, frac: number) => void): Promise<Engine> {
+    const e = new Engine(container, isDone);
+    await e.world.generateAsync(onProgress);
+    e.loadEdits();
+    e.finishSetup();
+    onProgress('Meshing chunks…', 0.92);
+    return e;
+  }
+
+  private constructor(private container: HTMLElement, private isDone: (lessonId: string) => boolean) {
     this.player = new Player(this.world);
-
-    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', preserveDrawingBuffer: false });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.className = 'nc-canvas';
     this.renderer.domElement.setAttribute('aria-label', 'NeuralCraft 3D world');
-    container.appendChild(this.renderer.domElement);
+    this.renderer.domElement.tabIndex = 0;
 
-    this.scene.background = SKY;
-    this.scene.fog = new THREE.Fog(SKY, 70, 190);
-
+    this.scene.fog = new THREE.Fog(0xa9d2f2, 70, 170);
     const { texture, canvas } = createAtlas();
     this.atlas = canvas;
-    this.materials = {
-      opaque: new THREE.MeshBasicMaterial({ map: texture, vertexColors: true }),
-      cutout: new THREE.MeshBasicMaterial({ map: texture, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide }),
-      translucent: new THREE.MeshBasicMaterial({ map: texture, vertexColors: true, transparent: true, opacity: 0.72, depthWrite: false }),
-    };
+    this.atlasTexture = texture;
+    this.sky = new SkySystem(this.scene, this.shared);
+    this.post = new PostFX(this.renderer, this.scene, this.camera);
+    this.scene.add(this.clouds.mesh);
+
+    this.glow = new ParticleSystem(4000, 'glow');
+    this.solid = new ParticleSystem(3000, 'solid', (x, y, z) => this.world.solidAt(x, y, z));
+    this.scene.add(this.glow.points, this.solid.points);
+    this.ambient = new AmbientLife(this.world, this.glow, this.solid);
+
+    this.weather = new Weather((x, z) => this.world.topCached(x, z));
+    this.weather.onThunder = (d) => audio.thunder(d);
+    this.weather.onChange = (k) => this.emit('weather', k);
+    this.scene.add(this.weather.rainMesh, this.weather.bolt);
 
     this.highlight = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(1.004, 1.004, 1.004)),
-      new THREE.LineBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.7 }),
+      new THREE.LineBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.65 }),
     );
     this.highlight.visible = false;
-    this.scene.add(this.highlight);
+    this.scene.add(this.highlight, this.avatar.group);
 
-    this.clouds = this.makeClouds();
-    this.scene.add(this.clouds);
+    this.ctx = {
+      scene: this.scene,
+      world: this.world,
+      glow: this.glow,
+      solid: this.solid,
+      setBlocks: (ops, animate = false) => {
+        if (animate) this.queue.push(...ops.map((o) => ({ ...o, record: false })));
+        else for (const o of ops) this.world.set(o.x, o.y, o.z, o.b, false);
+      },
+    };
 
-    this.world.generate();
-    this.loadEdits();
-    for (let cz = 0; cz < SZ / CHUNK; cz++) for (let cx = 0; cx < SX / CHUNK; cx++) this.pendingChunks.push([cx, cz]);
-    this.totalChunks = this.pendingChunks.length;
-    this.world.onDirty((cx, cz) => this.pendingChunks.push([cx, cz]));
+    this.unsubSettings = onSettings((s) => this.applySettings(s));
+  }
+
+  get simContext(): SimContext {
+    return this.ctx;
+  }
+
+  private finishSetup() {
+    const mats = {
+      opaque: createVoxelMaterial(this.atlasTexture, this.shared, 'opaque'),
+      cutout: createVoxelMaterial(this.atlasTexture, this.shared, 'cutout'),
+      translucent: createVoxelMaterial(this.atlasTexture, this.shared, 'translucent'),
+      water: createWaterMaterial(this.shared),
+    };
+    this.chunks = new ChunkRenderer(this.world, this.scene, mats, createCutoutDepthMaterial(this.atlasTexture));
 
     this.player.teleport(HUB_SPAWN.x, GROUND + 1.01, HUB_SPAWN.z, HUB_SPAWN.yaw);
-    this.sortPending();
+    this.buildInteractables();
     this.addLabels();
+    this.addBeamsAndPortals();
     this.bindInput();
+    const s = settings();
+    this.autoQuality = s.quality === 'auto';
+    this.quality = s.quality === 'auto' ? guessQuality(this.renderer) : s.quality;
+    this.applySettings(s);
     this.resize();
-    new ResizeObserver(() => this.resize()).observe(container);
+    new ResizeObserver(() => this.resize()).observe(this.container);
+    this.ready = true;
   }
 
   // ------------------------------------------------------------------ events
@@ -132,6 +227,10 @@ export class Engine {
     for (const fn of this.listeners[ev] ?? []) (fn as (...a: Parameters<EngineEvents[K]>) => void)(...args);
   }
 
+  addSystem(s: SimSystem) {
+    this.systems.push(s);
+  }
+
   // ------------------------------------------------------------------ lifecycle
 
   start() {
@@ -141,9 +240,9 @@ export class Engine {
     const loop = (t: number) => {
       if (!this.running) return;
       this.raf = requestAnimationFrame(loop);
-      const dt = Math.min(0.05, (t - this.last) / 1000);
+      const raw = Math.max(0, (t - this.last) / 1000);
       this.last = t;
-      this.tick(dt);
+      this.tick(Math.min(0.05, raw), raw);
     };
     this.raf = requestAnimationFrame(loop);
   }
@@ -165,7 +264,13 @@ export class Engine {
     return document.pointerLockElement === this.renderer.domElement;
   }
 
+  /** Is the terrain around the player meshed yet? (loading screen) */
+  get worldReady(): boolean {
+    return this.ready && this.chunks.readyAround(this.player.pos, 48);
+  }
+
   lock() {
+    audio.unlock();
     const el = this.renderer.domElement as HTMLCanvasElement & { requestPointerLock(o?: object): Promise<void> | void };
     try {
       const r = el.requestPointerLock({ unadjustedMovement: true });
@@ -183,85 +288,248 @@ export class Engine {
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
+    this.post.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    const px = h * this.renderer.getPixelRatio();
+    this.glow.setViewportScale(px, this.camera.fov);
+    this.solid.setViewportScale(px, this.camera.fov);
+  }
+
+  // ------------------------------------------------------------------ settings & quality
+
+  private applySettings(s: Settings) {
+    this.autoQuality = s.quality === 'auto';
+    if (!this.autoQuality) this.quality = s.quality as QualityLevel;
+    const q = PRESETS[this.quality];
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, q.pixelRatio));
+    this.renderer.shadowMap.enabled = q.shadows;
+    this.sky.sun.castShadow = q.shadows;
+    if (this.sky.sun.shadow.mapSize.x !== q.shadowMap) this.sky.setShadowMapSize(q.shadowMap);
+    this.sky.setShadowRadius(q.shadowRadius);
+    this.chunks?.setShadows(q.shadows);
+    this.post.enabled = q.post;
+    this.post.apply({ bloom: q.bloom, aa: q.aa });
+    if (this.chunks) this.chunks.renderDistance = q.renderDistance;
+    this.glow.budget = this.solid.budget = q.particles;
+    this.clouds.mesh.visible = q.clouds;
+    this.sky.dayLengthSec = s.dayMinutes * 60;
+    const fixed: Record<string, number> = { dawn: 0.285, noon: 0.5, sunset: 0.718, night: 0.92 };
+    if (s.timeMode === 'cycle') this.sky.paused = false;
+    else {
+      this.sky.paused = true;
+      this.sky.time = fixed[s.timeMode];
+    }
+    this.weather.setMode(s.weather);
+    this.cameraMode = s.camera;
+    audio.setVolumes({ master: s.master, music: s.music, sfx: s.sfx, ambience: s.ambience });
+    this.resize();
+  }
+
+  /** Frame rate from wall-clock time (the simulation dt is clamped, so it can't be used here). */
+  private trackFps(wall: number) {
+    this.fpsFrames++;
+    this.fpsTime += Math.min(wall, 1);
+    if (this.fpsTime < 2) return;
+    this.fps = this.fpsFrames / this.fpsTime;
+    this.fpsFrames = 0;
+    this.fpsTime = 0;
+    if (!this.autoQuality || this.time < 8 || this.cinematic) return;
+    this.fpsLow = this.fps < 30 ? this.fpsLow + 1 : 0;
+    const i = QUALITY_ORDER.indexOf(this.quality);
+    if (this.fpsLow >= 2 && i > 0) {
+      this.quality = QUALITY_ORDER[i - 1];
+      this.fpsLow = 0;
+      this.applySettings(settings());
+      this.emit('quality', this.quality, true);
+    }
   }
 
   // ------------------------------------------------------------------ frame
 
-  private tick(dt: number) {
-    const blocking = this.pendingChunks.length > 0 && this.chunks.size < 9;
-    if (!blocking) this.player.update(dt, this.input);
+  private tick(dt: number, wall = dt) {
+    this.time += dt;
+    this.shared.uTime.value = this.time;
+    const loading = !this.chunks.readyAround(this.player.pos, 40);
 
+    if (!loading && !this.cinematic) this.player.update(dt, this.input);
+    this.afterMove(dt);
     this.checkPortal(dt);
     this.checkPlace();
     this.checkNear();
     this.updateHighlight();
     this.drainQueue();
-    this.remesh();
+    this.world.flushLight();
+    this.chunks.update(this.cinematic ? this.camera.position : this.player.pos, loading ? 24 : 7);
 
-    this.player.eye(this.camera.position);
-    this.camera.rotation.set(this.player.pitch, this.player.yaw, 0, 'YXZ');
-    this.clouds.position.x = this.player.pos.x;
-    this.clouds.position.z = this.player.pos.z;
-    // The cloud plane follows the player; shift its texture so clouds stay put in the world and drift slowly.
-    this.cloudDrift += dt * 0.002;
-    const tex = (this.clouds.material as THREE.MeshBasicMaterial).map!;
-    tex.offset.set(this.player.pos.x / 300 + this.cloudDrift, -this.player.pos.z / 300);
+    // Atmosphere.
+    const s = settings();
+    const biome = this.world.biomeAt(this.player.pos.x, this.player.pos.z);
+    const precip = biome === 'neural' ? 'snow' : biome === 'data' ? 'none' : 'rain';
+    this.weather.update(dt, this.player.pos, s.weather, precip);
+    this.sky.overcast = this.weather.overcast;
+    this.sky.lightning = this.weather.flash;
+    this.sky.update(dt, this.camera, this.cinematic ? this.camera.position : this.player.pos, this.scene.fog as THREE.Fog);
+    this.shared.uWind.value = 1 + this.weather.overcast * 1.4;
+    this.shared.uWetness.value += (this.weather.rain - this.shared.uWetness.value) * Math.min(1, dt * 0.3);
+    this.clouds.setWeather(this.weather.overcast);
+    this.clouds.update(dt, this.camera.position, this.sky.sun.color, this.shared.uSkyAmbient.value, this.weather.overcast);
+
+    this.updateCamera(dt);
+    this.updateFog();
+
+    this.ambient.update(dt, this.player, this.sky.night, this.sky.daylight, this.weather.rain, PRESETS[this.quality].particles);
+    this.glow.update(dt, this.time);
+    this.solid.update(dt, this.time);
+    this.beams.update(this.time, this.sky.night, this.camera.position);
+    for (const p of this.portals) p.update(this.time, this.camera.position);
+
+    const focus = this.cinematic ? this.camera.position : this.player.pos;
+    const frame: FrameInfo = { dt, time: this.time, camera: this.camera, player: this.player, focus, daylight: this.sky.daylight, night: this.sky.night };
+    for (const sys of this.systems) sys.update(frame);
+
+    this.ambTimer -= dt;
+    if (this.ambTimer <= 0) {
+      this.ambTimer = 0.25;
+      audio.updateAmbience(this.ambienceState(biome), 0.25);
+    }
 
     this.saveTimer -= dt;
     if (this.saveTimer < 0 && this.saveTimer > -1) this.flushSave();
 
-    this.renderer.render(this.scene, this.camera);
+    const grade = this.post.grade.uniforms;
+    grade.uUnderwater.value = this.underwater ? 1 : 0;
+    grade.uFlash.value = this.weather.flash * 0.35;
+    grade.uTime.value = this.time;
+    if (this.post.enabled) this.post.render(dt);
+    else this.renderer.render(this.scene, this.camera);
+    this.trackFps(wall);
   }
 
-  private sortPending() {
-    const px = this.player.pos.x / CHUNK, pz = this.player.pos.z / CHUNK;
-    this.pendingChunks.sort((a, b) => Math.hypot(b[0] + 0.5 - px, b[1] + 0.5 - pz) - Math.hypot(a[0] + 0.5 - px, a[1] + 0.5 - pz));
+  /** Fast-forward every simulation without rendering (used by the smoke test and for screenshots). */
+  fastForward(seconds: number, step = 1 / 30) {
+    for (let t = 0; t < seconds; t += step) {
+      this.time += step;
+      const focus = this.cinematic ? this.camera.position : this.player.pos;
+      const frame: FrameInfo = { dt: step, time: this.time, camera: this.camera, player: this.player, focus, daylight: this.sky.daylight, night: this.sky.night };
+      for (const sys of this.systems) sys.update(frame);
+      this.glow.update(step, this.time);
+      this.solid.update(step, this.time);
+    }
   }
 
-  private remesh() {
-    if (!this.pendingChunks.length) return;
-    const start = performance.now();
-    const seen = new Set<number>();
-    const initial = this.chunks.size < this.totalChunks;
-    while (this.pendingChunks.length && performance.now() - start < (initial ? 14 : 8)) {
-      const [cx, cz] = this.pendingChunks.pop()!;
-      const key = cz * 1000 + cx;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      this.buildChunk(cx, cz);
+  private ambienceState(biome: string) {
+    const p = this.player.pos;
+    let water = 0, lava = 0;
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      const x = Math.floor(p.x + Math.cos(a) * 7), z = Math.floor(p.z + Math.sin(a) * 7);
+      const top = this.world.surfaceY(x, z);
+      const b = this.world.get(x, top, z);
+      if (b === B.WATER) water++;
+      if (b === B.MAGMA) lava++;
     }
-    // Drop duplicates of chunks we just rebuilt.
-    this.pendingChunks = this.pendingChunks.filter(([cx, cz]) => !seen.has(cz * 1000 + cx));
-    if (initial) this.emit('loading', this.chunks.size, this.totalChunks);
+    return {
+      daylight: this.sky.daylight,
+      night: this.sky.night,
+      biome,
+      rain: this.weather.rain,
+      storm: this.weather.kind === 'storm',
+      altitude: p.y,
+      nearWater: Math.min(1, water / 6),
+      nearLava: Math.min(1, lava / 4),
+      underwater: this.player.headUnderwater,
+    };
   }
 
-  private buildChunk(cx: number, cz: number) {
-    const key = cz * 1000 + cx;
-    for (const m of this.chunks.get(key) ?? []) {
-      this.scene.remove(m);
-      m.geometry.dispose();
+  private afterMove(dt: number) {
+    const p = this.player;
+    if (p.onGround && p.stride - this.lastStride > 2.1) {
+      this.lastStride = p.stride;
+      const under = this.world.get(Math.floor(p.pos.x), Math.floor(p.pos.y - 0.1), Math.floor(p.pos.z));
+      audio.step((BLOCKS[under]?.sound ?? 'stone') as Material);
     }
-    const geo = meshChunk(this.world, cx, cz);
-    const meshes: THREE.Mesh[] = [];
-    for (const pass of ['opaque', 'cutout', 'translucent'] as const) {
-      const g = geo[pass];
-      if (!g) continue;
-      const m = new THREE.Mesh(g, this.materials[pass]);
-      m.matrixAutoUpdate = false;
-      if (pass === 'translucent') m.renderOrder = 1;
-      this.scene.add(m);
-      meshes.push(m);
+    if (p.landed) {
+      audio.land(p.landed);
+      this.dip = Math.min(0.25, p.landed * 0.012);
+      p.landed = 0;
     }
-    this.chunks.set(key, meshes);
+    if (p.inWater && !this.wasInWater && p.vel.y < -3) {
+      audio.splash();
+      for (let i = 0; i < 16; i++) this.solid.spawn({ x: p.pos.x + (Math.random() - 0.5), y: p.pos.y + 0.8, z: p.pos.z + (Math.random() - 0.5), vx: (Math.random() - 0.5) * 3, vy: 3 + Math.random() * 3, vz: (Math.random() - 0.5) * 3, r: 0.7, g: 0.85, b: 1, size: 0.06, life: 0.8, gravity: 18 });
+    }
+    this.wasInWater = p.inWater;
+    this.dip = Math.max(0, this.dip - dt * 1.2);
+  }
+
+  private updateCamera(dt: number) {
+    const p = this.player;
+    const cam = this.camera;
+    if (this.cinematic) {
+      this.avatar.group.visible = true;
+      this.avatar.update(dt, p.pos, p.yaw, p.pitch, 0, true, false, false);
+      if (!this.cinematic(dt, cam)) this.cinematic = null;
+      return;
+    }
+    const speed = Math.hypot(p.vel.x, p.vel.z);
+    const s = settings();
+    const moving = p.onGround && speed > 0.5;
+    this.bob += moving ? dt * speed * 1.85 : 0;
+    const bobY = s.headBob && moving ? Math.sin(this.bob * 2) * 0.045 : 0;
+    const bobX = s.headBob && moving ? Math.cos(this.bob) * 0.028 : 0;
+    const eye = p.eye();
+    eye.y += bobY - this.dip;
+
+    const third = this.cameraMode === 'third';
+    this.avatar.group.visible = third;
+    this.avatar.update(dt, p.pos, p.yaw, p.pitch, speed, p.onGround, p.inWater && !p.flying, p.flying);
+
+    const targetFov = s.fov + (this.input.sprint && speed > 6 ? 8 : 0) + (p.flying && speed > 8 ? 5 : 0);
+    this.fovNow += (targetFov - this.fovNow) * Math.min(1, dt * 6);
+    if (Math.abs(cam.fov - this.fovNow) > 0.01) {
+      cam.fov = this.fovNow;
+      cam.updateProjectionMatrix();
+    }
+
+    cam.rotation.set(p.pitch, p.yaw, 0, 'YXZ');
+    if (!third) {
+      const right = new THREE.Vector3(Math.cos(p.yaw), 0, -Math.sin(p.yaw));
+      cam.position.copy(eye).addScaledVector(right, bobX);
+      return;
+    }
+    // Third person: pull back behind the head, stopping short of walls.
+    const back = p.lookDir().multiplyScalar(-1);
+    const head = p.eye();
+    let d = 0;
+    while (d < this.thirdDist) {
+      const q = head.clone().addScaledVector(back, d + 0.3);
+      if (this.world.solidAt(q.x, q.y, q.z)) break;
+      d += 0.2;
+    }
+    cam.position.copy(head).addScaledVector(back, Math.max(0.6, d)).add(new THREE.Vector3(0, 0.25, 0));
+  }
+
+  private updateFog() {
+    const fog = this.scene.fog as THREE.Fog;
+    const q = PRESETS[this.quality];
+    const cam = this.camera.position;
+    this.underwater = this.world.get(Math.floor(cam.x), Math.floor(cam.y), Math.floor(cam.z)) === B.WATER;
+    if (this.underwater) {
+      fog.near = 0.5;
+      fog.far = 26;
+      fog.color.setRGB(0.04, 0.2, 0.33).multiplyScalar(0.3 + this.sky.daylight * 0.7);
+      return;
+    }
+    const oc = this.weather.overcast;
+    fog.far = q.renderDistance * (1 - oc * 0.35);
+    fog.near = fog.far * (0.35 - oc * 0.15);
   }
 
   private drainQueue() {
     let n = 0;
-    while (this.queue.length && n < 320) {
+    while (this.queue.length && n < 400) {
       const op = this.queue.shift()!;
-      this.world.set(op.x, op.y, op.z, op.b, op.record);
+      if (this.world.set(op.x, op.y, op.z, op.b, op.record)) for (const s of this.systems) s.onEdit?.(op.x, op.y, op.z);
       n++;
     }
     if (n) this.scheduleSave();
@@ -269,59 +537,85 @@ export class Engine {
 
   // ------------------------------------------------------------------ world features
 
-  private makeClouds(): THREE.Mesh {
-    const c = document.createElement('canvas');
-    c.width = c.height = 128;
-    const ctx = c.getContext('2d')!;
-    let s = 7;
-    const r = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-    ctx.fillStyle = '#ffffff';
-    for (let i = 0; i < 26; i++) {
-      const x = Math.floor(r() * 16) * 8, y = Math.floor(r() * 16) * 8;
-      const w = 8 * (2 + Math.floor(r() * 4)), h = 8 * (1 + Math.floor(r() * 3));
-      ctx.fillRect(x, y, w, h);
+  private buildInteractables() {
+    for (const s of STATIONS) {
+      this.interactables.push({
+        id: s.id, kind: s.kind, x: s.x, y: s.y, z: s.z, title: s.title, realm: s.realm, lessonId: s.lessonId,
+      });
     }
-    const tex = new THREE.CanvasTexture(c);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.magFilter = THREE.NearestFilter;
-    tex.repeat.set(3, 3);
-    const mesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(900, 900),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide, fog: false }),
-    );
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.y = 92;
-    return mesh;
+    for (const l of LAB_SITES) {
+      this.interactables.push({ id: `lab:${l.kind}`, kind: 'lab', x: l.console.x, y: l.floorY + 1, z: l.console.z, title: LAB_NAMES[l.kind], realm: l.realm, lab: l.kind });
+    }
+    this.interactables.push({ id: 'flock', kind: 'flock', x: FLOCK_CONSOLE.x, y: GROUND + 2, z: FLOCK_CONSOLE.z, title: 'Flock Lab: boids' });
   }
 
   private addLabels() {
     for (const s of STATIONS) {
-      const sprite = makeLabel(this.stationLines(s), { accent: REALM_BY_ID.get(s.realm)!.color });
+      const sprite = makeLabel(this.stationLines(s.id), { accent: REALM_BY_ID.get(s.realm)!.color });
       sprite.position.set(s.x + 0.5, s.y + 2.4, s.z + 0.5);
       this.scene.add(sprite);
       this.labels.set(s.id, sprite);
     }
     for (const p of HUB_PORTALS) {
       const realm = REALM_BY_ID.get(p.realm)!;
-      const sprite = makeLabel([realm.name, 'Step on the portal ✦'], { accent: realm.color, scale: 0.75 });
-      sprite.position.set(p.x + 0.5, GROUND + 3.2, p.z + 0.5);
+      const sprite = makeLabel([realm.name, 'Walk through the ring ✦'], { accent: realm.color, scale: 0.75 });
+      sprite.position.set(p.x + 0.5, GROUND + 5.6, p.z + 0.5);
       this.scene.add(sprite);
     }
     for (const site of REALM_SITES) {
       const realm = REALM_BY_ID.get(site.id)!;
-      const back = makeLabel(['⟵ Back to the Hub'], { accent: '#ffc53d', scale: 0.9 });
-      back.position.set(site.portal.x + 0.5, GROUND + 2.8, site.portal.z + 0.5);
+      const back = makeLabel(['⟵ Back to the Hub'], { accent: '#ffc53d', scale: 0.8 });
+      back.position.set(site.portal.x + 0.5, GROUND + 5.4, site.portal.z + 0.5);
       this.scene.add(back);
       const title = makeLabel([realm.name, realm.tagline], { accent: realm.color, scale: 2.2 });
       title.position.set(site.x + 0.5, GROUND + 19, site.z + 0.5);
       this.scene.add(title);
     }
-    const hub = makeLabel(['NeuralCraft Hub', 'Pick a realm portal to start learning'], { accent: '#7ef9ff', scale: 1.6 });
-    hub.position.set(HUB.x + 0.5, GROUND + 11.5, HUB.z + 0.5);
+    for (const l of LAB_SITES) {
+      const realm = REALM_BY_ID.get(l.realm)!;
+      const sign = makeLabel([`🔬 ${LAB_NAMES[l.kind]}`, 'Live simulation · press E here'], { accent: realm.color, scale: 0.6 });
+      sign.position.set(l.console.x + 0.5, l.floorY + 3.1, l.console.z + 0.5);
+      this.scene.add(sign);
+    }
+    const flock = makeLabel(['🐦 Flock Lab', 'Boids: press E'], { accent: '#7ef9ff', scale: 0.9 });
+    flock.position.set(FLOCK_CONSOLE.x + 0.5, GROUND + 4.2, FLOCK_CONSOLE.z + 0.5);
+    this.scene.add(flock);
+    const hub = makeLabel(['NeuralCraft Hub', 'Walk through a portal ring to start learning'], { accent: '#7ef9ff', scale: 1.6 });
+    hub.position.set(HUB.x + 0.5, GROUND + 14, HUB.z + 0.5);
     this.scene.add(hub);
   }
 
-  private stationLines(s: Station): string[] {
+  private addBeamsAndPortals() {
+    const beams = STATIONS.map((s) => ({
+      id: s.id,
+      x: s.x,
+      y: s.y + 1,
+      z: s.z,
+      color: s.lessonId && this.isDone(s.lessonId) ? new THREE.Color(1, 0.78, 0.25) : new THREE.Color(REALM_BY_ID.get(s.realm)!.color),
+    }));
+    for (const l of LAB_SITES) beams.push({ id: `lab:${l.kind}`, x: l.console.x, y: l.floorY + 2, z: l.console.z, color: new THREE.Color(0.85, 0.9, 1) });
+    beams.push({ id: 'hub', x: HUB.x, y: GROUND + 10, z: HUB.z, color: new THREE.Color(0.5, 0.95, 1) });
+    this.beams = new BeamField(beams);
+    this.scene.add(this.beams.mesh);
+    this.ambient.beacons = STATIONS.map((s) => ({ x: s.x, y: s.y, z: s.z, color: new THREE.Color(REALM_BY_ID.get(s.realm)!.color) }));
+
+    for (const p of HUB_PORTALS) {
+      const color = new THREE.Color(REALM_BY_ID.get(p.realm)!.color);
+      const ring = new PortalRing(p.x, GROUND, p.z, p.angle, color);
+      this.portals.push(ring);
+      this.scene.add(ring.group);
+      this.ambient.portals.push({ x: p.x, y: GROUND + 1, z: p.z, color });
+    }
+    for (const s of REALM_SITES) {
+      const ring = new PortalRing(s.portal.x, GROUND, s.portal.z, s.angle, new THREE.Color(1, 0.78, 0.3));
+      this.portals.push(ring);
+      this.scene.add(ring.group);
+      this.ambient.portals.push({ x: s.portal.x, y: GROUND + 1, z: s.portal.z, color: new THREE.Color(1, 0.78, 0.3) });
+    }
+  }
+
+  private stationLines(id: string): string[] {
+    const s = STATIONS.find((x) => x.id === id)!;
     if (s.kind === 'forge') return ['⚒ Neural Forge', 'Train a neural net live · press E'];
     const lesson = LESSON_BY_ID.get(s.lessonId!)!;
     const done = this.isDone(lesson.id);
@@ -332,13 +626,32 @@ export class Engine {
     const s = STATIONS.find((x) => x.lessonId === lessonId);
     const sprite = s && this.labels.get(s.id);
     if (!s || !sprite) return;
-    updateLabel(sprite, this.stationLines(s), { accent: REALM_BY_ID.get(s.realm)!.color });
+    updateLabel(sprite, this.stationLines(s.id), { accent: REALM_BY_ID.get(s.realm)!.color });
     const done = this.isDone(lessonId);
     this.world.set(s.x, s.y, s.z, done ? B.GOLD : B.BEACON, false);
+    this.beams.setColor(s.id, done ? new THREE.Color(1, 0.78, 0.25) : new THREE.Color(REALM_BY_ID.get(s.realm)!.color));
   }
 
   refreshAllStations() {
     for (const s of STATIONS) if (s.lessonId) this.refreshStation(s.lessonId);
+  }
+
+  /** Fireworks over a point in the world. */
+  celebrate(x: number, y: number, z: number, color = new THREE.Color(1, 0.8, 0.3), count = 3) {
+    for (let i = 0; i < count; i++) {
+      setTimeout(() => {
+        const fx = x + (Math.random() - 0.5) * 8, fz = z + (Math.random() - 0.5) * 8;
+        firework(this.glow, fx, y, fz, i % 2 ? color : new THREE.Color().setHSL(Math.random(), 0.9, 0.6), 12 + Math.random() * 8);
+        const d = Math.hypot(fx - this.player.pos.x, fz - this.player.pos.z);
+        audio.firework(d, 0);
+      }, i * 380);
+    }
+  }
+
+  celebrateStation(lessonId: string) {
+    const s = STATIONS.find((x) => x.lessonId === lessonId);
+    if (!s) return;
+    this.celebrate(s.x + 0.5, s.y + 1, s.z + 0.5, new THREE.Color(REALM_BY_ID.get(s.realm)!.color), 4);
   }
 
   private checkPortal(dt: number) {
@@ -350,9 +663,10 @@ export class Engine {
       return;
     }
     this.portalTimer += dt;
-    if (this.portalTimer < 0.45) return;
+    if (this.portalTimer < 0.35) return;
     this.portalTimer = 0;
     this.portalCooldown = 1.5;
+    audio.portal();
     const inHub = Math.hypot(p.x - HUB.x, p.z - HUB.z) < HUB.radius + 2;
     if (!inHub) {
       this.teleport('hub');
@@ -371,6 +685,7 @@ export class Engine {
     let place: Place = 'wilds';
     if (Math.hypot(p.x - HUB.x, p.z - HUB.z) < HUB.radius + 6) place = 'hub';
     for (const s of REALM_SITES) if (Math.hypot(p.x - s.x, p.z - s.z) < REALM_RADIUS + 6) place = s.id;
+    for (const l of LAB_SITES) if (Math.hypot(p.x - l.x, p.z - l.z) < LAB_RADIUS + 6) place = l.kind;
     if (place !== this.currentPlace) {
       this.currentPlace = place;
       this.emit('place', place);
@@ -383,13 +698,13 @@ export class Engine {
 
   private checkNear() {
     const p = this.player.pos;
-    let best: Station | null = null, bd = 3.6;
-    for (const s of STATIONS) {
+    let best: Interactable | null = null, bd = 3.8;
+    for (const s of this.interactables) {
       const d = Math.hypot(p.x - (s.x + 0.5), p.z - (s.z + 0.5));
       if (d < bd && Math.abs(p.y - s.y) < 4) { bd = d; best = s; }
     }
-    if (best !== this.nearStation) {
-      this.nearStation = best;
+    if (best !== this.near) {
+      this.near = best;
       this.emit('near', best);
     }
   }
@@ -401,42 +716,66 @@ export class Engine {
   }
 
   private updateHighlight() {
-    const hit = this.target();
-    this.highlight.visible = !!hit;
+    const hit = this.cinematic ? null : this.target();
+    this.highlight.visible = !!hit && this.cameraMode === 'first';
     if (hit) this.highlight.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
   }
 
   // ------------------------------------------------------------------ actions
 
   interact() {
-    if (this.nearStation) this.emit('interact', this.nearStation);
+    if (this.near) {
+      audio.click();
+      this.emit('interact', this.near);
+    }
+  }
+
+  private interactableAt(x: number, y: number, z: number) {
+    return this.interactables.find((s) => s.x === x && Math.abs(s.y - y) <= 1 && s.z === z);
   }
 
   breakBlock() {
     const hit = this.target();
     if (!hit) return;
-    const station = STATIONS.find((s) => s.x === hit.x && s.y === hit.y && s.z === hit.z);
-    if (station) {
-      this.emit('interact', station);
+    const it = this.interactableAt(hit.x, hit.y, hit.z);
+    if (it && this.world.isProtected(hit.x, hit.y, hit.z)) {
+      this.emit('interact', it);
       return;
     }
     if (this.world.isProtected(hit.x, hit.y, hit.z) || hit.block === B.BEDROCK) return;
+    const def = BLOCKS[hit.block];
     this.world.set(hit.x, hit.y, hit.z, B.AIR);
+    for (const s of this.systems) s.onEdit?.(hit.x, hit.y, hit.z);
+    audio.breakBlock((def.sound ?? 'stone') as Material);
+    const c = new THREE.Color(def.color);
+    for (let i = 0; i < 16; i++) {
+      this.solid.spawn({
+        x: hit.x + 0.2 + Math.random() * 0.6, y: hit.y + 0.2 + Math.random() * 0.6, z: hit.z + 0.2 + Math.random() * 0.6,
+        vx: (Math.random() - 0.5) * 4, vy: 1 + Math.random() * 3, vz: (Math.random() - 0.5) * 4,
+        r: c.r * (0.8 + Math.random() * 0.3), g: c.g * (0.8 + Math.random() * 0.3), b: c.b * (0.8 + Math.random() * 0.3),
+        size: 0.1 + Math.random() * 0.06, life: 0.9 + Math.random() * 0.5, gravity: 16, drag: 0.5, collide: true,
+      });
+    }
     this.scheduleSave();
   }
 
   placeBlock() {
     const hit = this.target();
     if (!hit) return;
-    const station = STATIONS.find((s) => s.x === hit.x && s.y === hit.y && s.z === hit.z);
-    if (station) {
-      this.emit('interact', station);
+    const it = this.interactableAt(hit.x, hit.y, hit.z);
+    if (it && this.world.isProtected(hit.x, hit.y, hit.z)) {
+      this.emit('interact', it);
       return;
     }
-    const x = hit.x + hit.nx, y = hit.y + hit.ny, z = hit.z + hit.nz;
-    if (this.player.overlapsBlock(x, y, z)) return;
-    if (this.world.get(x, y, z) !== B.AIR && this.world.get(x, y, z) !== B.WATER) return;
+    const plantHit = BLOCKS[hit.block].shape === 'cross';
+    const x = plantHit ? hit.x : hit.x + hit.nx, y = plantHit ? hit.y : hit.y + hit.ny, z = plantHit ? hit.z : hit.z + hit.nz;
+    if (this.player.overlapsBlock(x, y, z) && BLOCKS[HOTBAR[this.hotbarIndex]].solid) return;
+    const cur = this.world.get(x, y, z);
+    if (cur !== B.AIR && cur !== B.WATER && BLOCKS[cur].shape !== 'cross') return;
+    if (this.world.isProtected(x, y, z)) return;
     this.world.set(x, y, z, HOTBAR[this.hotbarIndex]);
+    for (const s of this.systems) s.onEdit?.(x, y, z);
+    audio.place();
     this.scheduleSave();
   }
 
@@ -462,15 +801,21 @@ export class Engine {
     this.emit('fly', this.player.flying);
   }
 
+  toggleCamera() {
+    updateSettings({ camera: this.cameraMode === 'first' ? 'third' : 'first' });
+  }
+
   teleport(where: Place | string) {
-    const lesson = STATIONS.find((s) => s.id === where || s.lessonId === where);
-    if (lesson) {
-      const site = SITE_BY_REALM.get(lesson.realm)!;
-      // Stand between the station and the pad, facing the station.
-      const dx = site.x - lesson.x, dz = site.z - lesson.z;
+    const station = STATIONS.find((s) => s.id === where || s.lessonId === where);
+    const lab = LAB_SITES.find((l) => l.kind === where);
+    if (station) {
+      const site = SITE_BY_REALM.get(station.realm)!;
+      const dx = site.x - station.x, dz = site.z - station.z;
       const len = Math.hypot(dx, dz) || 1;
-      const x = lesson.x + 0.5 + (dx / len) * 3, z = lesson.z + 0.5 + (dz / len) * 3;
-      this.player.teleport(x, GROUND + 1.01, z, Math.atan2(-(lesson.x + 0.5 - x), -(lesson.z + 0.5 - z)));
+      const x = station.x + 0.5 + (dx / len) * 3, z = station.z + 0.5 + (dz / len) * 3;
+      this.player.teleport(x, GROUND + 1.01, z, Math.atan2(-(station.x + 0.5 - x), -(station.z + 0.5 - z)));
+    } else if (lab) {
+      this.player.teleport(lab.spawn.x, lab.floorY + 0.01, lab.spawn.z, lab.spawn.yaw, lab.spawn.pitch);
     } else if (where === 'hub' || where === 'wilds') {
       this.player.teleport(HUB_SPAWN.x, GROUND + 1.01, HUB_SPAWN.z, HUB_SPAWN.yaw);
     } else {
@@ -478,8 +823,16 @@ export class Engine {
       if (!site) return;
       this.player.teleport(site.spawn.x, GROUND + 1.01, site.spawn.z, site.spawn.yaw);
     }
+    this.player.flying = false;
+    this.emit('fly', false);
     this.portalCooldown = 1.5;
-    this.sortPending();
+  }
+
+  /** Point the camera at a world position. */
+  lookAt(x: number, y: number, z: number) {
+    const e = this.player.eye();
+    this.player.yaw = Math.atan2(-(x - e.x), -(z - e.z));
+    this.player.pitch = Math.atan2(y - e.y, Math.hypot(x - e.x, z - e.z));
   }
 
   // ------------------------------------------------------------------ visualisation & building
@@ -515,7 +868,6 @@ export class Engine {
   buildFrame() {
     const yaw = this.player.yaw;
     const fx0 = -Math.sin(yaw), fz0 = -Math.cos(yaw);
-    // Snap facing to the nearest axis so builds are grid-aligned.
     const [fx, fz] = Math.abs(fx0) > Math.abs(fz0) ? [Math.sign(fx0), 0] : [0, Math.sign(fz0)];
     const rx = -fz, rz = fx;
     const ox = Math.floor(this.player.pos.x) + fx * 3;
@@ -529,21 +881,22 @@ export class Engine {
     const f = this.buildFrame();
     this.lastBuild = [];
     const placed: QueuedOp[] = [];
-    const seen = new Set<number>();
+    const seen = new Map<number, QueuedOp>();
     for (const o of ops) {
       const x = f.ox + o.x * f.rx + o.z * f.fx;
       const z = f.oz + o.x * f.rz + o.z * f.fz;
       const y = f.oy + o.y;
       if (!this.world.inBounds(x, y, z) || y === 0 || this.world.isProtected(x, y, z)) continue;
       const i = World.index(x, y, z);
-      if (seen.has(i)) {
-        const existing = placed.find((p) => p.x === x && p.y === y && p.z === z);
-        if (existing) existing.b = o.b;
+      const existing = seen.get(i);
+      if (existing) {
+        existing.b = o.b;
         continue;
       }
-      seen.add(i);
       this.lastBuild.push({ x, y, z, prev: this.world.get(x, y, z) });
-      placed.push({ x, y, z, b: o.b, record: true });
+      const op = { x, y, z, b: o.b, record: true };
+      seen.set(i, op);
+      placed.push(op);
     }
     placed.sort((a, b) => a.y - b.y);
     this.queue.push(...placed);
@@ -562,6 +915,18 @@ export class Engine {
     location.reload();
   }
 
+  /** Cinematic letterbox bars (fraction of screen height each). */
+  setLetterbox(v: number) {
+    this.post.grade.uniforms.uBars.value = v;
+  }
+
+  /** Grab the current frame as a PNG data URL (photo mode). */
+  screenshot(): string {
+    if (this.post.enabled) this.post.render(0);
+    else this.renderer.render(this.scene, this.camera);
+    return this.renderer.domElement.toDataURL('image/png');
+  }
+
   // ------------------------------------------------------------------ persistence
 
   private scheduleSave() {
@@ -572,7 +937,7 @@ export class Engine {
     this.saveTimer = -2;
     try {
       const edits = this.world.serializeEdits();
-      if (edits.length > 400_000) return; // keep localStorage usage sane
+      if (edits.length > 400_000) return;
       localStorage.setItem(SAVE_KEY, JSON.stringify(edits));
     } catch {
       /* storage full or unavailable — the world simply isn't saved */
@@ -582,7 +947,10 @@ export class Engine {
   private loadEdits() {
     try {
       const raw = localStorage.getItem(SAVE_KEY);
-      if (raw) this.world.applyEdits(JSON.parse(raw));
+      if (raw) {
+        this.world.applyEdits(JSON.parse(raw));
+        this.world.relightAll();
+      }
     } catch {
       /* ignore corrupt saves */
     }
@@ -596,7 +964,13 @@ export class Engine {
     this.input.strafe = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
     this.input.jump = k.has('Space');
     this.input.descend = k.has('ShiftLeft') || k.has('ShiftRight');
-    this.input.sprint = k.has('ControlLeft') || (!this.player.flying && this.input.descend);
+    this.input.sprint = k.has('ControlLeft') || (!this.player.flying && !this.player.inWater && this.input.descend);
+  }
+
+  private crosshairRay(): THREE.Ray {
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    return new THREE.Ray(this.camera.position.clone(), dir);
   }
 
   private bindInput() {
@@ -606,13 +980,14 @@ export class Engine {
     };
 
     window.addEventListener('keydown', (e) => {
-      if (!this.running || typing() || e.metaKey || e.altKey) return;
+      if (!this.running || typing() || e.metaKey || e.altKey || this.cinematic) return;
       if (document.querySelector('.panel.open, dialog[open]') && !this.locked) return;
       const code = e.code;
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code)) e.preventDefault();
       if (code === 'Space' && !e.repeat) {
         const now = performance.now();
         if (now - this.lastSpace < 280) this.toggleFly();
+        else if (this.player.onGround) audio.jump();
         this.lastSpace = now;
       }
       this.keys.add(code);
@@ -620,8 +995,11 @@ export class Engine {
       if (e.repeat) return;
       if (code === 'KeyE') this.interact();
       if (code === 'KeyF') this.toggleFly();
-      if (code === 'KeyH') this.teleport('hub');
+      if (code === 'KeyH') { audio.portal(); this.teleport('hub'); }
       if (code === 'KeyB') this.emit('builder');
+      if (code === 'KeyG') this.emit('guide');
+      if (code === 'KeyP') this.emit('photo');
+      if (code === 'KeyV' || code === 'F5') { e.preventDefault(); this.toggleCamera(); }
       if (code.startsWith('Digit')) {
         const n = Number(code.slice(5));
         if (n >= 1 && n <= 9) this.selectHotbar(n - 1);
@@ -639,17 +1017,40 @@ export class Engine {
     const canvas = this.renderer.domElement;
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('mousedown', (e) => {
-      if (!this.locked) return;
+      if (!this.locked || this.cinematic) return;
+      const ray = this.crosshairRay();
+      for (const s of this.systems) {
+        if (s.pointer?.('down', e.button, ray)) {
+          this.pointerDown = e.button;
+          return;
+        }
+      }
       if (e.button === 0) this.breakBlock();
       if (e.button === 2) this.placeBlock();
       if (e.button === 1) this.pickBlock();
     });
+    window.addEventListener('mouseup', (e) => {
+      if (this.pointerDown < 0) return;
+      const ray = this.crosshairRay();
+      for (const s of this.systems) s.pointer?.('up', e.button, ray);
+      this.pointerDown = -1;
+    });
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
-      this.player.look(e.movementX * 0.0022, e.movementY * 0.0022);
+      const s = settings();
+      const k = 0.0022 * s.sensitivity;
+      this.player.look(e.movementX * k, e.movementY * k * (s.invertY ? -1 : 1));
+      if (this.pointerDown >= 0) {
+        const ray = this.crosshairRay();
+        for (const sys of this.systems) sys.pointer?.('move', this.pointerDown, ray);
+      }
     });
     canvas.addEventListener('wheel', (e) => {
       if (!this.locked) return;
+      if (this.cameraMode === 'third' && e.shiftKey) {
+        this.thirdDist = Math.max(2, Math.min(10, this.thirdDist + Math.sign(e.deltaY)));
+        return;
+      }
       this.selectHotbar(this.hotbarIndex + (e.deltaY > 0 ? 1 : -1));
     }, { passive: true });
     document.addEventListener('pointerlockchange', () => {
@@ -661,18 +1062,18 @@ export class Engine {
     });
   }
 
+  /** Touch controls feed look deltas here. */
+  lookBy(dx: number, dy: number) {
+    this.player.look(dx, dy);
+  }
+
   /** Data-URL icon for an atlas tile (hotbar / palette). */
   icon(tile: number): string {
     if (!this.icons.has(tile)) this.icons.set(tile, tileIcon(this.atlas, tile));
     return this.icons.get(tile)!;
   }
 
-  /** Touch controls feed look deltas here. */
-  lookBy(dx: number, dy: number) {
-    this.player.look(dx, dy);
-  }
-
-  get lessonPlace(): RealmId | null {
-    return this.currentPlace === 'hub' || this.currentPlace === 'wilds' ? null : this.currentPlace;
+  dispose() {
+    this.unsubSettings();
   }
 }

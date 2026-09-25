@@ -1,14 +1,17 @@
 import * as THREE from 'three';
+import { B } from './blocks';
+import { SX, SZ } from './layout';
 import type { World } from './world';
 
 const HALF_W = 0.3;
 const HEIGHT = 1.8;
-const EYE = 1.62;
+export const EYE = 1.62;
 const GRAVITY = 28;
 const JUMP = 8.6;
 const WALK = 5.2;
 const SPRINT = 8.5;
 const FLY = 14;
+const SWIM = 3.2;
 
 export interface MoveInput {
   forward: number; // -1..1
@@ -25,6 +28,12 @@ export class Player {
   pitch = 0;
   onGround = false;
   flying = false;
+  inWater = false;
+  headUnderwater = false;
+  /** Distance walked on the ground (drives footsteps and head bob). */
+  stride = 0;
+  /** Impact speed of the last landing, consumed by the engine for sound and camera dip. */
+  landed = 0;
   private wasGrounded = false;
   private world: World;
 
@@ -46,11 +55,11 @@ export class Player {
     this.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, this.pitch - dy));
   }
 
-  teleport(x: number, y: number, z: number, yaw?: number) {
+  teleport(x: number, y: number, z: number, yaw?: number, pitch = -0.12) {
     this.pos.set(x, y, z);
     this.vel.set(0, 0, 0);
     if (yaw !== undefined) this.yaw = yaw;
-    this.pitch = -0.12;
+    this.pitch = pitch;
   }
 
   private collides(px: number, py: number, pz: number): boolean {
@@ -73,7 +82,12 @@ export class Player {
   }
 
   update(dt: number, input: MoveInput) {
-    const speed = this.flying ? FLY : input.sprint ? SPRINT : WALK;
+    const w = this.world;
+    this.inWater = w.get(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.4), Math.floor(this.pos.z)) === B.WATER;
+    this.headUnderwater = w.get(Math.floor(this.pos.x), Math.floor(this.pos.y + EYE), Math.floor(this.pos.z)) === B.WATER;
+    const swimming = this.inWater && !this.flying;
+
+    const speed = this.flying ? FLY : swimming ? SWIM * (input.sprint ? 1.5 : 1) : input.sprint ? SPRINT : WALK;
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
     // Forward is −Z rotated by yaw; strafe is +X rotated by yaw.
     let mx = -sin * input.forward + cos * input.strafe;
@@ -81,7 +95,7 @@ export class Player {
     const len = Math.hypot(mx, mz);
     if (len > 1) { mx /= len; mz /= len; }
 
-    const accel = this.onGround || this.flying ? 14 : 4;
+    const accel = this.onGround || this.flying ? 14 : swimming ? 6 : 4;
     const k = Math.min(1, accel * dt);
     this.vel.x += (mx * speed - this.vel.x) * k;
     this.vel.z += (mz * speed - this.vel.z) * k;
@@ -89,17 +103,30 @@ export class Player {
     if (this.flying) {
       const vy = (input.jump ? 1 : 0) - (input.descend ? 1 : 0);
       this.vel.y += (vy * speed - this.vel.y) * Math.min(1, 10 * dt);
+    } else if (swimming) {
+      // Buoyancy: gentle sinking, Space swims up, Shift dives.
+      const target = input.jump ? 3.6 : input.descend ? -3.2 : -0.9;
+      this.vel.y += (target - this.vel.y) * Math.min(1, 4 * dt);
+      // Hop out onto the bank when swimming against a ledge.
+      if (input.jump && !this.headUnderwater) this.vel.y = Math.max(this.vel.y, 4.2);
     } else {
       this.vel.y -= GRAVITY * dt;
       if (input.jump && this.onGround) this.vel.y = JUMP;
       this.vel.y = Math.max(this.vel.y, -40);
     }
 
+    const fallSpeed = -this.vel.y;
     this.wasGrounded = this.onGround;
     this.onGround = false;
     this.moveAxis('x', this.vel.x * dt);
     this.moveAxis('z', this.vel.z * dt);
     this.moveAxis('y', this.vel.y * dt);
+    if (this.onGround && !this.wasGrounded && fallSpeed > 6) this.landed = fallSpeed;
+    if (this.onGround) this.stride += Math.hypot(this.vel.x, this.vel.z) * dt;
+
+    // World border: the sea around the island is as far as you can go.
+    this.pos.x = Math.max(2, Math.min(SX - 2, this.pos.x));
+    this.pos.z = Math.max(2, Math.min(SZ - 2, this.pos.z));
 
     // Fell out of the world? Put the player back on top.
     if (this.pos.y < -10) {
@@ -118,7 +145,7 @@ export class Player {
       if (!this.collides(this.pos.x, this.pos.y, this.pos.z)) continue;
 
       // Auto step-up for single-block ledges while walking.
-      if (axis !== 'y' && this.wasGrounded && !this.flying) {
+      if (axis !== 'y' && (this.wasGrounded || this.inWater) && !this.flying) {
         const y = this.pos.y;
         this.pos.y = Math.floor(y) + 1.001;
         if (this.pos.y - y <= 1.01 && !this.collides(this.pos.x, this.pos.y, this.pos.z)) continue;
