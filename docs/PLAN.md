@@ -225,14 +225,21 @@ flowchart LR
 ```
 src/
   curriculum/   realms, 36 lessons (theory, starters, solutions, tests, viz), viz helpers
-  world/        blocks, procedural textures, terrain & layout, mesher (AO), player physics, engine
+  world/        blocks, procedural textures, biomes & layout, lighting (sky + RGB block light),
+                mesher (AO, 4 render passes), chunk streaming, player physics, engine
+  render/       voxel & water shaders, sky/sun/moon/stars, clouds, weather, particles,
+                beams & portals, avatar, post-processing, quality presets
+  audio/        procedural Web Audio: music, ambience, sound effects
+  ai/           pure, tested algorithms: optimisers, A*, Q-learning, boids, Galton physics,
+                3D k-means, word-embedding analogies, digit MLP inference
+  sims/         the six labs, flock and Nova guide built on those algorithms; cinematic tour
   runtime/      harness (pure), JS worker, Python worker, sandbox client with timeouts
   ml/           seeded RNG, datasets, MLP with backprop
   progress/     XP, levels, badges, streaks, saved code — localStorage
   blog/         markdown posts + loader
   ui/           DOM helpers, router, pages, components (lesson, builder, forge, editor, preview)
-scripts/        fetch-news.mjs (+ feeds.json), smoke.mjs (browser test)
-tests/          curriculum (both languages), MLP, world/mesher, news parsing
+scripts/        fetch-news.mjs (+ feeds.json), smoke.mjs (browser test), train-digits.ts (offline MNIST)
+tests/          curriculum (both languages), MLP, world/mesher, lighting, AI algorithms, news parsing
 ```
 
 ### Key technical decisions
@@ -275,19 +282,25 @@ tests/          curriculum (both languages), MLP, world/mesher, news parsing
 - Blog (6 posts by Aditya Rekhe) + daily AI news pipeline.
 - CI (typecheck, 108 unit tests, build) and GitHub Pages deploy; browser smoke test.
 
-### v0.2 — Depth (next 4–6 weeks)
+### v0.2 — A living, realistic world ✅ (this release)
+- Rendering: smooth sky light and coloured block light (flood-fill, 16 levels per channel), real-time sun/moon shadow maps, physically based sky with a day/night cycle, stars, moon, voxel clouds, animated water with fresnel and specular, bloom, colour grade and FXAA/SMAA; Low → Ultra presets with automatic fallback.
+- A 320 × 320 world with six biomes (meadow, dunes, forest, peaks, coast, volcanic), five tree species, flowers and grass, roads with street lamps.
+- Weather (rain, thunderstorms with lightning, snow in the peaks), fireflies, falling leaves, birds, third-person avatar, swimming, head bob and fully procedural audio.
+- Six walk-in simulation labs — gradient descent valley, Galton board, k-means nebula, neural cathedral (MNIST MLP), embedding galaxy, Q-learning maze — plus a boids flock and Nova, an A* guide; cinematic tour, photo mode and settings.
+
+### v0.3 — Depth (next 4–6 weeks)
 - **+20 lessons:** train/test split & overfitting, gradient-descent linear regression, decision-tree split search, naive Bayes, PCA, convolution on a pixel-art image, RNN step, embeddings arithmetic, BPE tokeniser, tiny bigram language model, policy gradient intuition.
 - **NumPy track:** optional "now do it vectorised" follow-up for Python solutions.
 - **Boss challenges** per realm: multi-function projects (e.g. build k-means end-to-end, then run it on 3D data you placed).
 - Forge: regression mode, dropout, momentum/Adam, save/share network configs via URL.
 
-### v0.3 — Community & creativity (6–10 weeks)
+### v0.4 — Community & creativity (6–10 weeks)
 - **Shareable builds & worlds** via URL-encoded or gist-backed JSON (still no accounts).
 - **Community realms:** lesson packs as JSON/Markdown submitted by PR, reviewed and loaded as new islands.
 - **Daily challenge** seeded by date (same puzzle for everyone; local streak).
 - Blog: tag pages, RSS feed of our own posts, OG images generated at build.
 
-### v0.4 — Scale & polish
+### v0.5 — Scale & polish
 - WebGPU renderer path + greedy meshing + larger worlds; LOD for far chunks.
 - Offline PWA (service worker caching engine + Pyodide).
 - i18n (Hindi, Spanish, Portuguese first), full accessibility audit.

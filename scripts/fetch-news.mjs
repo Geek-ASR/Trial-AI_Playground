@@ -18,7 +18,7 @@ async function fetchFeed(feed) {
   try {
     const res = await fetch(feed.url, {
       signal: ctrl.signal,
-      headers: { 'user-agent': 'NeuralCraftNewsBot/1.0 (+https://github.com/Geek-ASR/neuralcraft)', accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' },
+      headers: { 'user-agent': 'NeuralCraftNewsBot/1.0 (+https://github.com/Geek-ASR/Trial-AI_Playground)', accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const items = parseFeed(await res.text(), feed);
