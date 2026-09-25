@@ -1,0 +1,14 @@
+[
+  { "name": "OpenAI", "url": "https://openai.com/news/rss.xml", "kind": "lab" },
+  { "name": "Google DeepMind", "url": "https://deepmind.google/blog/feed/basic/", "kind": "lab" },
+  { "name": "Google AI", "url": "https://blog.google/technology/ai/rss/", "kind": "lab" },
+  { "name": "Hugging Face", "url": "https://huggingface.co/blog/feed.xml", "kind": "open-source" },
+  { "name": "Microsoft Research", "url": "https://www.microsoft.com/en-us/research/feed/", "kind": "research" },
+  { "name": "NVIDIA Technical Blog", "url": "https://developer.nvidia.com/blog/feed", "kind": "engineering" },
+  { "name": "AWS Machine Learning", "url": "https://aws.amazon.com/blogs/machine-learning/feed/", "kind": "engineering" },
+  { "name": "Berkeley AI Research", "url": "https://bair.berkeley.edu/blog/feed.xml", "kind": "research" },
+  { "name": "MIT News — AI", "url": "https://news.mit.edu/rss/topic/artificial-intelligence2", "kind": "research" },
+  { "name": "MIT Technology Review — AI", "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed", "kind": "news" },
+  { "name": "Ahead of AI (Sebastian Raschka)", "url": "https://magazine.sebastianraschka.com/feed", "kind": "newsletter" },
+  { "name": "The Gradient", "url": "https://thegradient.pub/rss/", "kind": "research" }
+]

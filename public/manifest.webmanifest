@@ -1,0 +1,10 @@
+{
+  "name": "NeuralCraft",
+  "short_name": "NeuralCraft",
+  "description": "Learn AI, ML and data science by building a voxel world.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b0d1c",
+  "theme_color": "#0b0d1c",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
