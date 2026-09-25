@@ -16,7 +16,7 @@ const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 const step = (s) => console.log('•', s);
 
-for (const route of ['', '#/learn', '#/blog', '#/news', '#/about', '#/forge']) {
+for (const route of ['', '#/learn', '#/blog', '#/news', '#/about', '#/forge', '#/functions']) {
   await page.goto(base + route);
   await page.waitForSelector('main > *');
   step(`route ${route || '/'} ok`);

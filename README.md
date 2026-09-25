@@ -13,7 +13,8 @@
 - 🐦 **A boids flock** over the hub, and **Nova**, a robot guide who finds the way to your next lesson with A* search and shows you every tile it explored.
 - 🧑‍💻 **Real code.** Implement `mean`, `softmax`, `k-means`, `attention`, `Q-learning`… in Python (via Pyodide/WebAssembly) or JavaScript. Tests tell you instantly if you nailed it.
 - 🧊 **Your output gets built.** Histograms rise out of the sand, decision boundaries spread across the floor, attention weights stand up as towers.
-- ⚒ **Neural Forge.** Design a neural network, press Train, watch it learn — live in 2D and painted onto the world in 3D.
+- ⚒ **Neural Forge in 3D.** Design a neural network, press Train and orbit it while it learns: every neuron is a tile showing what it has learned to detect, weights are glowing rods (orange +, blue −), signals pulse through them, and the output rises as a 3D probability landscape cut by a glass sheet at p = 0.5 — the decision boundary. Hover the landscape to push any point through the network.
+- 🧊 **3D Function Lab.** Type any function — `sigmoid(a*x + b*y + c)`, `x^2 - y^2`, `sin(x)*cos(y)` — and explore its surface in 3D with sliders for a, b, c, gradient arrows, a tangent plane under your cursor and balls that roll downhill by gradient descent. Presets cover activation functions (with their derivatives), single neurons, loss landscapes and more. Formulas are parsed by a small safe compiler, never `eval`.
 - 🧱 **Code Builder.** Press **B** and build with Blockly blocks, Python or JavaScript: plot 3D functions, sculpt data clusters, grow fractals.
 - 🏆 **XP, levels, streaks, badges** — saved only in your browser. Export/import any time.
 - 📰 **Blog + daily AI news** from the major AI labs and research blogs.

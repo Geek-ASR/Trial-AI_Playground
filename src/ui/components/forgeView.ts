@@ -4,11 +4,14 @@ import { recordForge } from '../../progress/store';
 import { B, type BlockId } from '../../world/blocks';
 import type { VoxelOp } from '../../world/ops';
 import { h } from '../dom';
+import type { Net3D } from './net3d';
 import { celebrate } from './lessonView';
 
 export interface ForgeOptions {
   /** Called a few times per second with voxels for the Neural Peaks display pad. */
   onPad?: (ops: VoxelOp[]) => void;
+  /** Start in the interactive 3D view (default) or the flat 2D diagrams. */
+  view?: '3d' | '2d';
 }
 
 const PAD = 12;
@@ -46,6 +49,12 @@ export function forgeView(opts: ForgeOptions = {}): { el: HTMLElement; destroy()
   const stats = h('div', { class: 'forge-stats' });
   const playBtn = h('button', { class: 'btn btn-primary', onclick: () => toggle() }, '▶ Train');
   const hint = h('p', { class: 'muted small' });
+  let view = opts.view ?? '3d';
+  let net3d: Net3D | null = null;
+  let loading3d = false;
+  const stage3d = h('div', { class: 'forge-3d' });
+  const flat = h('div', { class: 'forge-grid' });
+  const viewBtn = h('button', { class: 'btn btn-ghost', onclick: () => setView(view === '3d' ? '2d' : '3d') });
 
   const select = <T extends string>(label: string, options: [T, string][], value: T, onChange: (v: T) => void) => {
     const s = h('select', { class: 'select' }, options.map(([v, l]) => h('option', { value: v, selected: v === value }, l)));
@@ -99,13 +108,45 @@ export function forgeView(opts: ForgeOptions = {}): { el: HTMLElement; destroy()
       playBtn,
       h('button', { class: 'btn', onclick: () => { stepEpoch(); draw(); } }, '⏭ Step'),
       h('button', { class: 'btn btn-ghost', onclick: () => { seed++; reset(); } }, '↺ Re-initialise'),
+      viewBtn,
     ),
     hint,
-    h('div', { class: 'forge-grid' },
-      h('figure', null, boundary, h('figcaption', null, 'Decision boundary · ● train ○ test')),
-      h('div', null, stats, lossCanvas, netCanvas),
-    ),
+    stage3d,
+    flat,
   );
+  const side = h('div', null, stats, lossCanvas, netCanvas);
+  const boundaryFig = h('figure', null, boundary, h('figcaption', null, 'Decision boundary · ● train ○ test'));
+
+  function setView(v: '3d' | '2d') {
+    view = v;
+    viewBtn.textContent = v === '3d' ? '▦ 2D view' : '🧊 3D view';
+    stage3d.hidden = v !== '3d';
+    netCanvas.hidden = v === '3d';
+    if (v === '3d') {
+      // Stats and loss sit beside the 3D stage; the flat diagrams are hidden.
+      flat.replaceChildren(side);
+      flat.classList.add('forge-grid-3d');
+      if (!net3d && !loading3d) {
+        loading3d = true;
+        stage3d.replaceChildren(h('div', { class: 'forge-3d-loading muted' }, 'Building the 3D view…'));
+        import('./net3d').then(({ createNet3D }) => {
+          loading3d = false;
+          if (destroyed) return;
+          net3d = createNet3D();
+          stage3d.replaceChildren(net3d.el);
+          draw();
+        }).catch(() => {
+          loading3d = false;
+          stage3d.replaceChildren(h('p', { class: 'muted' }, '3D needs WebGL, which is not available here — showing the 2D view.'));
+          setView('2d');
+        });
+      }
+    } else {
+      flat.replaceChildren(boundaryFig, side);
+      flat.classList.remove('forge-grid-3d');
+    }
+    draw();
+  }
 
   function regen() {
     data = split(makeDataset(dataset, 300, noise));
@@ -186,7 +227,8 @@ export function forgeView(opts: ForgeOptions = {}): { el: HTMLElement; destroy()
     }
 
     drawLoss();
-    drawNet();
+    if (view === '2d') drawNet();
+    net3d?.update({ net, feats, train: data.train, test: data.test });
 
     const now = performance.now();
     if (opts.onPad && (forcePad || now - lastPad > 350)) {
@@ -260,13 +302,18 @@ export function forgeView(opts: ForgeOptions = {}): { el: HTMLElement; destroy()
     });
   }
 
+  let destroyed = false;
   regen();
+  setView(view);
 
   return {
     el,
     destroy() {
+      destroyed = true;
       playing = false;
       cancelAnimationFrame(raf);
+      net3d?.destroy();
+      net3d = null;
     },
   };
 }

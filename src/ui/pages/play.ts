@@ -391,7 +391,8 @@ function openBuilder() {
 }
 
 function openForge() {
-  const view = forgeView({ onPad: (ops) => engine?.showOnPad('neural', ops, false) });
+  // The world is already a 3D scene, so the panel opens on the lighter 2D diagrams (3D is one click away).
+  const view = forgeView({ view: '2d', onPad: (ops) => engine?.showOnPad('neural', ops, false) });
   openPanel(view, true);
   if (engine && engine.place === 'neural') lookAtPad('neural');
 }

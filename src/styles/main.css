@@ -302,6 +302,15 @@ pre code { background: none; border: 0; padding: 0; }
 .forge-net, .forge-loss { width: 100%; display: block; }
 .forge-loss { height: 60px; margin: 8px 0; background: var(--bg-2); border-radius: 8px; }
 .forge-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.forge-grid.forge-grid-3d { grid-template-columns: 1fr; }
+.forge-3d[hidden] { display: none; }
+.net3d { position: relative; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: #0b0d1c; }
+.net3d-canvas { display: block; width: 100%; height: clamp(360px, 62vh, 640px); touch-action: none; cursor: grab; }
+.net3d-canvas:active { cursor: grabbing; }
+.net3d-readout { position: absolute; left: 12px; top: 10px; display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; background: rgba(11, 13, 28, 0.72); padding: 6px 10px; border-radius: 8px; font-size: 0.85rem; pointer-events: none; }
+.net3d-help { position: absolute; right: 12px; bottom: 6px; margin: 0; pointer-events: none; }
+.forge-3d-loading { display: grid; place-items: center; height: 360px; border: 1px dashed var(--line); border-radius: 14px; }
+@media (max-width: 720px) { .net3d-help { display: none; } }
 
 /* ---------- play mode */
 body.playing { overflow: hidden; }
@@ -446,3 +455,24 @@ body.playing #app { display: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* ---------- 3D function lab */
+.fn-page { display: grid; gap: 14px; }
+.fn-bar { display: flex; align-items: center; gap: 10px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; }
+.fn-label { font: 600 1rem var(--mono); color: var(--accent); white-space: nowrap; }
+.fn-input { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--text); font: 1.05rem var(--mono); outline: none; padding: 6px 0; }
+.fn-error { margin: -6px 0 0; min-height: 1.2em; color: #ff7b7b; font-size: 0.85rem; }
+.fn-presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+.fn-group { display: grid; gap: 6px; }
+.fn-group-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.fn-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fn-stage { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 14px; align-items: start; }
+.fn-side { display: grid; gap: 10px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+.fn-side .field input[type=range] { width: 100%; }
+.fn-note { margin: 0; min-height: 3em; }
+.fn-sliders { display: grid; gap: 8px; }
+.fn-sliders:empty { display: none; }
+.fn-help summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+@media (max-width: 900px) { .fn-stage { grid-template-columns: 1fr; } }
+.fn-chips .chip { border: 1px solid var(--line); cursor: pointer; font-family: var(--font); }
+.fn-chips .chip:hover { border-color: var(--accent); color: var(--accent); }

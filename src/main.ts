@@ -29,6 +29,7 @@ const NAV: [string, string][] = [
   ['play', 'Play'],
   ['learn', 'Learn'],
   ['forge', 'Neural Forge'],
+  ['functions', 'Function Lab'],
   ['blog', 'Blog'],
   ['news', 'AI News'],
   ['about', 'About'],
@@ -61,6 +62,7 @@ let playLoaded = false;
 const loadPlay = () => import('./ui/pages/play');
 const loadLearn = () => import('./ui/pages/learn');
 const loadForge = () => import('./ui/pages/forge');
+const loadFunctions = () => import('./ui/pages/functions');
 
 async function render(route: Route) {
   const id = ++renderId;
@@ -89,6 +91,9 @@ async function render(route: Route) {
     }
     case 'forge':
       page = (await loadForge()).forgePage();
+      break;
+    case 'functions':
+      page = (await loadFunctions()).functionsPage();
       break;
     case 'blog':
       page = route.params[0] ? blogPostPage(route.params[0]) : blogListPage();
