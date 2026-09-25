@@ -56,6 +56,16 @@ function line(x1, y1, z1, x2, y2, z2, type) {
     __push(Math.round(x1 + (x2 - x1) * t), Math.round(y1 + (y2 - y1) * t), Math.round(z1 + (z2 - z1) * t), type);
   }
 }
+let __shapes = 0;
+function shape(kind, x, y, z, opts) {
+  const o = opts || {};
+  if (++__shapes > 2000) throw new Error('Too many shapes: builds are limited to 2000 shapes.');
+  const s = o.size === undefined ? 1 : o.size;
+  const [sx, sy, sz] = Array.isArray(s) ? [s[0], s[1] === undefined ? s[0] : s[1], s[2] === undefined ? s[0] : s[2]] : [s, s, s];
+  const r = o.rotate === undefined ? 0 : o.rotate;
+  const [rx, ry, rz] = Array.isArray(r) ? [r[0] || 0, r[1] || 0, r[2] || 0] : [0, r, 0];
+  __ops.push(['shape', kind, x, y, z, sx, sy, sz, rx, ry, rz, o.color === undefined ? 'white' : o.color, !!o.glow]);
+}
 `;
 
 /**
@@ -131,6 +141,24 @@ def line(x1, y1, z1, x2, y2, z2, type='stone'):
     for i in range(n + 1):
         t = i / n
         __nc_push(round(x1 + (x2 - x1) * t), round(y1 + (y2 - y1) * t), round(z1 + (z2 - z1) * t), type)
+
+__nc_shapes = [0]
+
+def shape(kind, x, y, z, size=1, color='white', rotate=0, glow=False):
+    __nc_shapes[0] += 1
+    if __nc_shapes[0] > 2000:
+        raise RuntimeError('Too many shapes: builds are limited to 2000 shapes.')
+    if isinstance(size, (list, tuple)):
+        sx = size[0]
+        sy = size[1] if len(size) > 1 else sx
+        sz = size[2] if len(size) > 2 else sx
+    else:
+        sx = sy = sz = size
+    if isinstance(rotate, (list, tuple)):
+        rx, ry, rz = (list(rotate) + [0, 0, 0])[:3]
+    else:
+        rx, ry, rz = 0, rotate, 0
+    __nc_ops.append(['shape', kind, x, y, z, sx, sy, sz, rx, ry, rz, color, bool(glow)])
 `;
 
 export function pyCallExpr(call: string): string {

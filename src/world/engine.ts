@@ -9,6 +9,8 @@ import { BeamField, PortalRing } from '../render/effects';
 import { createCutoutDepthMaterial, createSharedUniforms, createVoxelMaterial, createWaterMaterial, type SharedUniforms } from '../render/materials';
 import { firework, ParticleSystem } from '../render/particles';
 import { PostFX } from '../render/post';
+import { PropField } from '../render/propField';
+import { blockCost, credits, refund, spend } from '../progress/credits';
 import { guessQuality, onSettings, PRESETS, QUALITY_ORDER, settings, updateSettings, type QualityLevel, type Settings } from '../render/settings';
 import { SkySystem } from '../render/sky';
 import { Weather, type WeatherKind } from '../render/weather';
@@ -18,11 +20,12 @@ import { B, BLOCKS, type BlockId } from './blocks';
 import { ChunkRenderer } from './chunks';
 import { makeLabel, updateLabel } from './labels';
 import {
-  GROUND, HUB, HUB_PORTALS, HUB_SPAWN, LAB_RADIUS, LAB_SITES, PAD_HALF, REALM_RADIUS, REALM_SITES, SITE_BY_REALM,
+  GROUND, HUB, HUB_PORTALS, HUB_SPAWN, LAB_RADIUS, LAB_SITES, PAD_HALF, PLAYGROUND, REALM_RADIUS, REALM_SITES, SITE_BY_REALM,
   STATIONS, SX, SZ, type LabKind,
 } from './layout';
 import type { VoxelOp } from './ops';
 import { Player, type MoveInput } from './player';
+import { shapeCost, type Prop } from './shapes';
 import { createAtlas, tileIcon } from './textures';
 import { World } from './world';
 
@@ -31,7 +34,16 @@ const REACH = 7;
 
 export const HOTBAR: BlockId[] = [B.GRASS, B.STONE, B.PLANKS, B.BRICK, B.GLASS, B.LAMP, B.CRYSTAL, B.GOLD, B.CHERRY_LEAVES];
 
-export type Place = RealmId | LabKind | 'hub' | 'wilds';
+export type Place = RealmId | LabKind | 'hub' | 'wilds' | 'playground';
+
+/** What a code build did (or why it couldn't). */
+export interface BuildResult {
+  blocks: number;
+  shapes: number;
+  cost: number;
+  /** Set when the build was refused for lack of credits. */
+  short?: number;
+}
 
 export const LAB_NAMES: Record<LabKind, string> = {
   valley: 'Gradient Descent Valley',
@@ -54,6 +66,11 @@ interface EngineEvents {
   photo: () => void;
   quality: (level: QualityLevel, auto: boolean) => void;
   weather: (kind: WeatherKind) => void;
+  /** Tried to build without enough block credits. */
+  needCredits: (need: number, have: number) => void;
+  /** Free-cursor mode (Shift+M) switched on or off. */
+  cursor: (free: boolean) => void;
+  credits: () => void;
 }
 
 interface QueuedOp {
@@ -111,6 +128,14 @@ export class Engine {
   private queue: QueuedOp[] = [];
   private padCells = new Map<RealmId, Set<number>>();
   private lastBuild: { x: number; y: number; z: number; prev: BlockId }[] = [];
+  private lastBuildCost = 0;
+  /** Shapes built with code. */
+  readonly props: PropField;
+  /** Shift+M: a normal mouse cursor instead of mouse-look. */
+  freeCursor = false;
+  /** In free-cursor mode, the ray under the mouse replaces the crosshair. */
+  private aim: THREE.Ray | null = null;
+  private freeDrag: { x: number; y: number; moved: boolean } | null = null;
   private raf = 0;
   private lastSpace = 0;
   private icons = new Map<number, string>();
@@ -163,6 +188,7 @@ export class Engine {
     this.solid = new ParticleSystem(3000, 'solid', (x, y, z) => this.world.solidAt(x, y, z));
     this.scene.add(this.glow.points, this.solid.points);
     this.ambient = new AmbientLife(this.world, this.glow, this.solid);
+    this.props = new PropField(this.scene);
 
     this.weather = new Weather((x, z) => this.world.topCached(x, z));
     this.weather.onThunder = (d) => audio.thunder(d);
@@ -282,6 +308,26 @@ export class Engine {
 
   unlock() {
     if (this.locked) document.exitPointerLock();
+  }
+
+  /** Shift+M: swap mouse-look for a normal cursor (and back). */
+  setFreeCursor(on: boolean) {
+    if (on === this.freeCursor) return;
+    this.freeCursor = on;
+    this.aim = null;
+    this.freeDrag = null;
+    this.renderer.domElement.classList.toggle('free-cursor', on);
+    if (on) this.unlock();
+    else this.lock();
+    this.emit('cursor', on);
+  }
+
+  private mouseRay(e: MouseEvent): THREE.Ray {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    const rc = new THREE.Raycaster();
+    rc.setFromCamera(ndc, this.camera);
+    return rc.ray.clone();
   }
 
   private resize() {
@@ -547,6 +593,7 @@ export class Engine {
       this.interactables.push({ id: `lab:${l.kind}`, kind: 'lab', x: l.console.x, y: l.floorY + 1, z: l.console.z, title: LAB_NAMES[l.kind], realm: l.realm, lab: l.kind });
     }
     this.interactables.push({ id: 'flock', kind: 'flock', x: FLOCK_CONSOLE.x, y: GROUND + 2, z: FLOCK_CONSOLE.z, title: 'Flock Lab: boids' });
+    this.interactables.push({ id: 'kiosk', kind: 'kiosk', x: PLAYGROUND.kiosk.x, y: GROUND + 2, z: PLAYGROUND.kiosk.z, title: 'Earn block credits' });
   }
 
   private addLabels() {
@@ -580,6 +627,11 @@ export class Engine {
     const flock = makeLabel(['🐦 Flock Lab', 'Boids: press E'], { accent: '#7ef9ff', scale: 0.9 });
     flock.position.set(FLOCK_CONSOLE.x + 0.5, GROUND + 4.2, FLOCK_CONSOLE.z + 0.5);
     this.scene.add(flock);
+    const kiosk = makeLabel(['⚡ Earn blocks', 'Quizzes · maths · code — press E'], { accent: '#ffc53d', scale: 0.7 });
+    kiosk.position.set(PLAYGROUND.kiosk.x + 0.5, GROUND + 4.2, PLAYGROUND.kiosk.z + 0.5);
+    const plot = makeLabel(['🏗 Your Playground', 'Build anything · B = code builder · Q = earn blocks'], { accent: '#ffc53d', scale: 1.4 });
+    plot.position.set(PLAYGROUND.x + 0.5, GROUND + 16, PLAYGROUND.z + 0.5);
+    this.scene.add(kiosk, plot);
     const hub = makeLabel(['NeuralCraft Hub', 'Walk through a portal ring to start learning'], { accent: '#7ef9ff', scale: 1.6 });
     hub.position.set(HUB.x + 0.5, GROUND + 14, HUB.z + 0.5);
     this.scene.add(hub);
@@ -686,6 +738,7 @@ export class Engine {
     if (Math.hypot(p.x - HUB.x, p.z - HUB.z) < HUB.radius + 6) place = 'hub';
     for (const s of REALM_SITES) if (Math.hypot(p.x - s.x, p.z - s.z) < REALM_RADIUS + 6) place = s.id;
     for (const l of LAB_SITES) if (Math.hypot(p.x - l.x, p.z - l.z) < LAB_RADIUS + 6) place = l.kind;
+    if (Math.hypot(p.x - PLAYGROUND.x, p.z - PLAYGROUND.z) < PLAYGROUND.radius + 4) place = 'playground';
     if (place !== this.currentPlace) {
       this.currentPlace = place;
       this.emit('place', place);
@@ -710,14 +763,22 @@ export class Engine {
   }
 
   private target() {
+    if (this.aim) {
+      const { origin: o, direction: d } = this.aim;
+      return this.world.raycast(o.x, o.y, o.z, d.x, d.y, d.z, REACH * 3);
+    }
     const eye = this.player.eye();
     const dir = this.player.lookDir();
     return this.world.raycast(eye.x, eye.y, eye.z, dir.x, dir.y, dir.z, REACH);
   }
 
+  private pointerRay(): THREE.Ray {
+    return this.aim ?? this.crosshairRay();
+  }
+
   private updateHighlight() {
     const hit = this.cinematic ? null : this.target();
-    this.highlight.visible = !!hit && this.cameraMode === 'first';
+    this.highlight.visible = !!hit && (this.cameraMode === 'first' || this.freeCursor);
     if (hit) this.highlight.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
   }
 
@@ -736,6 +797,19 @@ export class Engine {
 
   breakBlock() {
     const hit = this.target();
+    // A code-built shape in front of the block? Remove that instead (and refund it).
+    const ray = this.pointerRay();
+    const prop = this.props.pick(ray, this.aim ? REACH * 3 : REACH + 1);
+    if (prop && (!hit || prop.distance < ray.origin.distanceTo(new THREE.Vector3(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5)) - 0.4)) {
+      this.props.remove(prop.prop);
+      refund(shapeCost(prop.prop));
+      audio.breakBlock('glass');
+      const p = ray.at(prop.distance, new THREE.Vector3());
+      const c = new THREE.Color(prop.prop.color);
+      for (let i = 0; i < 20; i++) this.solid.spawn({ x: p.x, y: p.y, z: p.z, vx: (Math.random() - 0.5) * 4, vy: 1 + Math.random() * 3, vz: (Math.random() - 0.5) * 4, r: c.r, g: c.g, b: c.b, size: 0.12, life: 0.9, gravity: 16, drag: 0.5, collide: true });
+      this.emit('credits');
+      return;
+    }
     if (!hit) return;
     const it = this.interactableAt(hit.x, hit.y, hit.z);
     if (it && this.world.isProtected(hit.x, hit.y, hit.z)) {
@@ -744,7 +818,13 @@ export class Engine {
     }
     if (this.world.isProtected(hit.x, hit.y, hit.z) || hit.block === B.BEDROCK) return;
     const def = BLOCKS[hit.block];
+    // Blocks you placed yourself give their credits back; natural terrain doesn't.
+    const mine = this.world.edits.get(World.index(hit.x, hit.y, hit.z)) === hit.block;
     this.world.set(hit.x, hit.y, hit.z, B.AIR);
+    if (mine) {
+      refund(blockCost(hit.block));
+      this.emit('credits');
+    }
     for (const s of this.systems) s.onEdit?.(hit.x, hit.y, hit.z);
     audio.breakBlock((def.sound ?? 'stone') as Material);
     const c = new THREE.Color(def.color);
@@ -773,6 +853,12 @@ export class Engine {
     const cur = this.world.get(x, y, z);
     if (cur !== B.AIR && cur !== B.WATER && BLOCKS[cur].shape !== 'cross') return;
     if (this.world.isProtected(x, y, z)) return;
+    const cost = blockCost(HOTBAR[this.hotbarIndex]);
+    if (!spend(cost)) {
+      this.emit('needCredits', cost, credits());
+      return;
+    }
+    this.emit('credits');
     this.world.set(x, y, z, HOTBAR[this.hotbarIndex]);
     for (const s of this.systems) s.onEdit?.(x, y, z);
     audio.place();
@@ -816,6 +902,8 @@ export class Engine {
       this.player.teleport(x, GROUND + 1.01, z, Math.atan2(-(station.x + 0.5 - x), -(station.z + 0.5 - z)));
     } else if (lab) {
       this.player.teleport(lab.spawn.x, lab.floorY + 0.01, lab.spawn.z, lab.spawn.yaw, lab.spawn.pitch);
+    } else if (where === 'playground') {
+      this.player.teleport(PLAYGROUND.spawn.x, GROUND + 1.01, PLAYGROUND.spawn.z, PLAYGROUND.spawn.yaw);
     } else if (where === 'hub' || where === 'wilds') {
       this.player.teleport(HUB_SPAWN.x, GROUND + 1.01, HUB_SPAWN.z, HUB_SPAWN.yaw);
     } else {
@@ -876,11 +964,14 @@ export class Engine {
     return { ox, oy, oz, fx, fz, rx, rz };
   }
 
-  /** Apply learner-built ops (local coords: x = right, y = up, z = forward). Returns how many blocks were queued. */
-  build(ops: VoxelOp[]): number {
+  /**
+   * Apply learner-built ops and shapes (local coords: x = right, y = up, z = forward).
+   * Costs block credits; refuses the whole build if there aren't enough.
+   */
+  build(ops: VoxelOp[], shapes: Prop[] = []): BuildResult {
     const f = this.buildFrame();
-    this.lastBuild = [];
     const placed: QueuedOp[] = [];
+    const prev: { x: number; y: number; z: number; prev: BlockId }[] = [];
     const seen = new Map<number, QueuedOp>();
     for (const o of ops) {
       const x = f.ox + o.x * f.rx + o.z * f.fx;
@@ -893,21 +984,45 @@ export class Engine {
         existing.b = o.b;
         continue;
       }
-      this.lastBuild.push({ x, y, z, prev: this.world.get(x, y, z) });
+      prev.push({ x, y, z, prev: this.world.get(x, y, z) });
       const op = { x, y, z, b: o.b, record: true };
       seen.set(i, op);
       placed.push(op);
     }
+    // The local frame is mirrored (x = right, z = forward), so turns flip sign.
+    const frameYaw = THREE.MathUtils.radToDeg(Math.atan2(f.fx, f.fz));
+    const world: Prop[] = shapes.map((p) => ({
+      ...p,
+      x: f.ox + p.x * f.rx + p.z * f.fx,
+      z: f.oz + p.x * f.rz + p.z * f.fz,
+      y: f.oy + p.y,
+      ry: frameYaw - p.ry,
+    }));
+    // placed[] and prev[] are filled in lockstep; unchanged cells and erasing (air) are free.
+    const cost = placed.reduce((s, o, i) => s + (o.b !== prev[i].prev ? blockCost(o.b) : 0), 0) + world.reduce((s, p) => s + shapeCost(p), 0);
+    if (!spend(cost)) {
+      this.emit('needCredits', cost, credits());
+      return { blocks: 0, shapes: 0, cost, short: cost - credits() };
+    }
+    this.lastBuild = prev;
+    this.lastBuildCost = cost;
     placed.sort((a, b) => a.y - b.y);
     this.queue.push(...placed);
-    return placed.length;
+    const n = world.length ? this.props.add(world) : 0;
+    this.emit('credits');
+    return { blocks: placed.length, shapes: n, cost };
   }
 
+  /** Undo the last code build (blocks and shapes) and refund its credits. */
   undoBuild(): number {
     const n = this.lastBuild.length;
     for (const c of this.lastBuild) this.queue.push({ x: c.x, y: c.y, z: c.z, b: c.prev, record: true });
     this.lastBuild = [];
-    return n;
+    const shapes = this.props.undo();
+    if (this.lastBuildCost) refund(this.lastBuildCost);
+    this.lastBuildCost = 0;
+    this.emit('credits');
+    return n + shapes.length;
   }
 
   resetWorld() {
@@ -990,6 +1105,11 @@ export class Engine {
         else if (this.player.onGround) audio.jump();
         this.lastSpace = now;
       }
+      if (code === 'KeyM' && e.shiftKey) {
+        e.preventDefault();
+        if (!e.repeat) this.setFreeCursor(!this.freeCursor);
+        return;
+      }
       this.keys.add(code);
       this.syncKeys();
       if (e.repeat) return;
@@ -1017,6 +1137,20 @@ export class Engine {
     const canvas = this.renderer.domElement;
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('mousedown', (e) => {
+      if (this.freeCursor && !this.locked && !this.cinematic) {
+        this.aim = this.mouseRay(e);
+        for (const s of this.systems) {
+          if (s.pointer?.('down', e.button, this.aim)) {
+            this.pointerDown = e.button;
+            return;
+          }
+        }
+        // Left: click to break, drag to turn the camera. Right: place. Middle: pick.
+        if (e.button === 0) this.freeDrag = { x: e.clientX, y: e.clientY, moved: false };
+        if (e.button === 2) this.placeBlock();
+        if (e.button === 1) this.pickBlock();
+        return;
+      }
       if (!this.locked || this.cinematic) return;
       const ray = this.crosshairRay();
       for (const s of this.systems) {
@@ -1030,12 +1164,32 @@ export class Engine {
       if (e.button === 1) this.pickBlock();
     });
     window.addEventListener('mouseup', (e) => {
+      if (this.freeDrag && e.button === 0) {
+        const click = !this.freeDrag.moved;
+        this.freeDrag = null;
+        if (click && e.target === canvas) {
+          this.aim = this.mouseRay(e);
+          this.breakBlock();
+        }
+      }
       if (this.pointerDown < 0) return;
-      const ray = this.crosshairRay();
+      const ray = this.pointerRay();
       for (const s of this.systems) s.pointer?.('up', e.button, ray);
       this.pointerDown = -1;
     });
     document.addEventListener('mousemove', (e) => {
+      if (this.freeCursor && !this.locked) {
+        const s = settings();
+        if (this.freeDrag) {
+          if (Math.hypot(e.clientX - this.freeDrag.x, e.clientY - this.freeDrag.y) > 4) this.freeDrag.moved = true;
+          if (this.freeDrag.moved) this.player.look(e.movementX * 0.004 * s.sensitivity, e.movementY * 0.004 * s.sensitivity * (s.invertY ? -1 : 1));
+        }
+        if (e.target === canvas) {
+          this.aim = this.mouseRay(e);
+          if (this.pointerDown >= 0) for (const sys of this.systems) sys.pointer?.('move', this.pointerDown, this.aim);
+        } else this.aim = null;
+        return;
+      }
       if (!this.locked) return;
       const s = settings();
       const k = 0.0022 * s.sensitivity;
@@ -1046,7 +1200,7 @@ export class Engine {
       }
     });
     canvas.addEventListener('wheel', (e) => {
-      if (!this.locked) return;
+      if (!this.locked && !this.freeCursor) return;
       if (this.cameraMode === 'third' && e.shiftKey) {
         this.thirdDist = Math.max(2, Math.min(10, this.thirdDist + Math.sign(e.deltaY)));
         return;
@@ -1054,6 +1208,12 @@ export class Engine {
       this.selectHotbar(this.hotbarIndex + (e.deltaY > 0 ? 1 : -1));
     }, { passive: true });
     document.addEventListener('pointerlockchange', () => {
+      if (this.locked && this.freeCursor) {
+        this.freeCursor = false;
+        this.aim = null;
+        this.renderer.domElement.classList.remove('free-cursor');
+        this.emit('cursor', false);
+      }
       this.emit('lock', this.locked);
       if (!this.locked) {
         this.keys.clear();

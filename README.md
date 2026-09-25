@@ -15,7 +15,9 @@
 - 🧊 **Your output gets built.** Histograms rise out of the sand, decision boundaries spread across the floor, attention weights stand up as towers.
 - ⚒ **Neural Forge in 3D.** Design a neural network, press Train and orbit it while it learns: every neuron is a tile showing what it has learned to detect, weights are glowing rods (orange +, blue −), signals pulse through them, and the output rises as a 3D probability landscape cut by a glass sheet at p = 0.5 — the decision boundary. Hover the landscape to push any point through the network.
 - 🧊 **3D Function Lab.** Type any function — `sigmoid(a*x + b*y + c)`, `x^2 - y^2`, `sin(x)*cos(y)` — and explore its surface in 3D with sliders for a, b, c, gradient arrows, a tangent plane under your cursor and balls that roll downhill by gradient descent. Presets cover activation functions (with their derivatives), single neurons, loss landscapes and more. Formulas are parsed by a small safe compiler, never `eval`.
-- 🧱 **Code Builder.** Press **B** and build with Blockly blocks, Python or JavaScript: plot 3D functions, sculpt data clusters, grow fractals.
+- ⚡ **Earn your blocks.** Every block you place costs a credit (glowing ones 3). Earn credits by answering AI/ML quiz questions, solving generated maths problems (dot products, gradients, MSE, probabilities…) or writing small functions like `relu`, `softmax` and `nearest_label` — press **Q** anywhere or visit the kiosk. Streaks pay up to double, lessons pay 40, and breaking your own blocks refunds them.
+- 🏗 **Your Playground.** A huge empty desert plot east of the hub (Map → *Your Playground*) with a faint 8-block grid, ready for whatever you want to build.
+- 🧱 **Code Builder.** Press **B** and build with Blockly blocks, Python or JavaScript: `block`, `fill`, `sphere`, `line` for voxels, plus `shape()` for smooth objects of **any size, turn and colour** — boxes, spheres, cylinders, cones, pyramids, rings, capsules, domes and wedges, optionally glowing. Undo refunds the last build.
 - 🏆 **XP, levels, streaks, badges** — saved only in your browser. Export/import any time.
 - 📰 **Blog + daily AI news** from the major AI labs and research blogs.
 - 🔒 **No accounts, no tracking, no server.**
@@ -60,7 +62,7 @@ MNIST_DIR=/path/to/mnist node --experimental-strip-types scripts/train-digits.ts
 
 ## Controls
 
-`WASD` move · mouse look · `Space` jump (double-tap to fly) · `Shift` sprint/descend · `F` fly · `E` open lesson or lab console · left/right click break/place · `1–9` blocks · `B` Code Builder · `M` map & labs · `G` Nova guide · `V` first/third person · `P` photo mode · `H` hub · `Esc` release mouse. Touch controls appear automatically on phones and tablets.
+`WASD` move · mouse look · `Space` jump (double-tap to fly) · `Shift` sprint/descend · `F` fly · `E` open lesson or lab console · left/right click break/place · `1–9` blocks · `B` Code Builder · `M` map & labs · `G` Nova guide · `V` first/third person · `P` photo mode · `Q` earn block credits · `H` hub · `Shift+M` switch between mouse-look and a normal cursor (drag to look, click to break, right-click to place) · `Esc` release mouse. Touch controls appear automatically on phones and tablets.
 
 ## Deploying
 

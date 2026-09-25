@@ -33,7 +33,7 @@ export interface SimSystem {
   onEdit?(x: number, y: number, z: number): void;
 }
 
-export type InteractableKind = 'lesson' | 'forge' | 'lab' | 'flock';
+export type InteractableKind = 'lesson' | 'forge' | 'lab' | 'flock' | 'kiosk';
 
 export interface Interactable {
   id: string;

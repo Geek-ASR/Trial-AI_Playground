@@ -74,6 +74,41 @@ const digit = await page.evaluate(async () => {
 });
 step(`cathedral classified a sample digit: ${JSON.stringify(digit)}`);
 
+// Playground: free cursor, earning credits and a code build with shapes.
+await page.evaluate(() => {
+  window.neuralcraft.engine.teleport('playground');
+  window.neuralcraft.engine.player.pitch = 0;
+});
+await page.waitForFunction(() => document.querySelector('.hud-place')?.textContent?.includes('Playground'), null, { timeout: 60000 });
+step(`arrived: ${await place()}`);
+await page.keyboard.press('Shift+KeyM');
+await page.waitForFunction(() => window.neuralcraft.engine.freeCursor === true, null, { timeout: 5000 });
+step('Shift+M switched to a free cursor');
+await page.keyboard.press('KeyQ');
+await page.waitForSelector('.credits-panel');
+const before = Number((await page.textContent('.cred-big')).replace(/[^0-9]/g, ''));
+await page.click('.credits-panel .seg:has-text("Code")');
+await page.click('.code-card:has-text("ReLU")');
+await page.click('.credits-panel .seg:has-text("JavaScript")');
+await page.click('.credits-panel .cm-content');
+await page.keyboard.press('Control+A');
+await page.keyboard.insertText('function relu(x) { return Math.max(0, x); }');
+await page.click('.credits-panel button:has-text("Run & check")');
+await page.waitForSelector('.cred-feedback.ok', { timeout: 15000 });
+const after = Number((await page.textContent('.cred-big')).replace(/[^0-9]/g, ''));
+if (!(after > before)) throw new Error(`credits did not increase (${before} → ${after})`);
+step(`solved a code challenge: ⚡ ${before} → ${after}`);
+await page.keyboard.press('Escape');
+await page.keyboard.press('KeyB');
+await page.waitForSelector('.builder .seg');
+await page.click('.builder .seg:has-text("JavaScript")');
+await page.waitForSelector('.builder .cm-editor');
+await page.selectOption('.builder select', 'robot');
+await page.click('.builder button:has-text("Build it")');
+await page.waitForFunction(() => /Built .*shapes/.test(document.querySelector('.builder-status')?.textContent || ''), null, { timeout: 30000 });
+step(`code build: ${await page.textContent('.builder-status')}`);
+
+
 await browser.close();
 if (errors.length) {
   console.error('Page errors:', errors);

@@ -12,6 +12,43 @@ export interface BuildExample {
  */
 export const BUILD_EXAMPLES: BuildExample[] = [
   {
+    id: 'robot',
+    name: 'Shape robot',
+    blurb: 'shape(): any size, colour and turn — not stuck to the grid.',
+    js: `// Smooth shapes: shape(kind, x, y, z, { size, color, rotate, glow })
+shape('box', 0, 0, 4, { size: [3, 3, 2], color: 'silver' });            // body
+shape('sphere', 0, 3, 4, { size: 2.2, color: 'white' });                // head
+shape('sphere', -0.5, 3.8, 3, { size: 0.5, color: 'cyan', glow: true }); // eyes
+shape('sphere', 0.5, 3.8, 3, { size: 0.5, color: 'cyan', glow: true });
+shape('cylinder', 0, 5.1, 4, { size: [0.15, 1, 0.15], color: 'grey' }); // antenna
+shape('sphere', 0, 6, 4, { size: 0.5, color: 'red', glow: true });
+for (const side of [-2, 2]) {
+  shape('capsule', side, 0.5, 4, { size: [0.8, 2.6, 0.8], color: 'blue', rotate: [0, 0, side * 10] }); // arms
+}
+// A ring of glowing cones around it
+for (let i = 0; i < 12; i++) {
+  const a = (i / 12) * Math.PI * 2;
+  shape('cone', Math.round(Math.cos(a) * 7), 0, 4 + Math.round(Math.sin(a) * 7), { size: [1, 2 + (i % 3), 1], color: i % 2 ? 'orange' : 'purple', glow: true });
+}
+`,
+    py: `# Smooth shapes: shape(kind, x, y, z, size=..., color=..., rotate=..., glow=...)
+import math
+shape('box', 0, 0, 4, size=(3, 3, 2), color='silver')            # body
+shape('sphere', 0, 3, 4, size=2.2, color='white')                # head
+shape('sphere', -0.5, 3.8, 3, size=0.5, color='cyan', glow=True) # eyes
+shape('sphere', 0.5, 3.8, 3, size=0.5, color='cyan', glow=True)
+shape('cylinder', 0, 5.1, 4, size=(0.15, 1, 0.15), color='grey') # antenna
+shape('sphere', 0, 6, 4, size=0.5, color='red', glow=True)
+for side in (-2, 2):
+    shape('capsule', side, 0.5, 4, size=(0.8, 2.6, 0.8), color='blue', rotate=(0, 0, side * 10))  # arms
+# A ring of glowing cones around it
+for i in range(12):
+    a = i / 12 * 2 * math.pi
+    shape('cone', round(math.cos(a) * 7), 0, 4 + round(math.sin(a) * 7), size=(1, 2 + i % 3, 1),
+          color='orange' if i % 2 else 'purple', glow=True)
+`,
+  },
+  {
     id: 'tower',
     name: 'Rainbow tower',
     blurb: 'A loop, a list and your first build.',

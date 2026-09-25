@@ -10,6 +10,7 @@ import { clear, h } from '../dom';
 import { md } from '../markdown';
 import { createEditor, type CodeEditor } from './editor';
 import { toast } from './toast';
+import { answer } from '../../progress/credits';
 import { VoxelPreview } from './voxelPreview';
 
 export interface LessonViewOptions {
@@ -219,6 +220,12 @@ export function lessonView(lesson: Lesson, opts: LessonViewOptions): { el: HTMLE
     status.textContent = '✓ Completed';
     status.classList.add('chip-done');
     celebrate(reward);
+    // Lessons pay block credits too: 40 the first time, 10 for solving it in the other language.
+    const base = reward.firstTime ? 40 : reward.xp ? 10 : 0;
+    if (base) {
+      const won = answer(true, base);
+      toast(`+${won} ⚡ block credits`, 'Spend them building in the world.', 'reward', 3500);
+    }
     opts.onPassed?.(lesson, reward);
     const next = nextLesson(lesson.id);
     results.append(

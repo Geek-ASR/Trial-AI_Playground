@@ -9,6 +9,8 @@ import { BLOCKS } from '../../world/blocks';
 import type { Engine, Place } from '../../world/engine';
 import { LAB_SITES, SITE_BY_REALM, STATION_BY_LESSON, type LabKind } from '../../world/layout';
 import { builderView } from '../components/builderView';
+import { challengeView } from '../components/challengeView';
+import { credits, onCredits } from '../../progress/credits';
 import { forgeView } from '../components/forgeView';
 import { lessonView } from '../components/lessonView';
 import { settingsView } from '../components/settingsView';
@@ -45,11 +47,14 @@ const hud = {
     h('p', { class: 'muted small' }, 'Generating 8 million blocks, six biomes and six live AI labs — right here in your browser.'),
   ),
   map: h('dialog', { class: 'map-dialog' }),
+  credits: h('button', { class: 'hud-btn hud-credits', title: 'Block credits — earn more with quizzes, maths and code (Q)' }),
+  cursor: h('div', { class: 'hud-cursor', hidden: true }, '🖱 Free cursor — drag to look · click to break · right-click to place · Shift+M for mouse-look'),
 };
 
 function placeName(p: Place): string {
   if (p === 'hub') return '✦ The Hub';
   if (p === 'wilds') return '🌲 The Wilds';
+  if (p === 'playground') return '🏗 Your Playground';
   if (REALM_BY_ID.has(p as RealmId)) return REALM_BY_ID.get(p as RealmId)!.name;
   return `🔬 ${LAB_NAMES[p as LabKind] ?? p}`;
 }
@@ -72,15 +77,20 @@ function buildRoot(): HTMLElement {
   );
   const topRight = h('div', { class: 'hud-top-right' },
     h('button', { class: 'hud-btn', onclick: () => openMap(), title: 'Map & teleport (M)' }, '🗺 Map'),
+    hud.credits,
     h('button', { class: 'hud-btn', onclick: () => openBuilder(), title: 'Code Builder (B)' }, '🧱 Build'),
     h('button', { class: 'hud-btn', onclick: () => guideToNext(), title: 'Nova guides you to your next lesson (G)' }, '🧭 Guide'),
     h('button', { class: 'hud-btn', onclick: () => togglePhoto(), title: 'Photo mode (P)' }, '📷'),
     h('button', { class: 'hud-btn', onclick: () => openSettings(), title: 'Settings' }, '⚙'),
     h('button', { class: 'hud-btn', onclick: () => showStart(true), title: 'Controls' }, '?'),
   );
-  el.append(topLeft, topRight, hud.fps, h('div', { class: 'crosshair', 'aria-hidden': 'true' }), hud.prompt, hud.fly, hud.guide, hud.hotbar, hud.caption, hud.photo, hud.start, hud.loading, hud.map);
+  el.append(topLeft, topRight, hud.cursor, hud.fps, h('div', { class: 'crosshair', 'aria-hidden': 'true' }), hud.prompt, hud.fly, hud.guide, hud.hotbar, hud.caption, hud.photo, hud.start, hud.loading, hud.map);
   renderLevel();
   subscribe(renderLevel);
+  const renderCredits = () => { hud.credits.textContent = `⚡ ${credits().toLocaleString()}`; };
+  hud.credits.addEventListener('click', () => openChallenges());
+  renderCredits();
+  onCredits(renderCredits);
   return el;
 }
 
@@ -153,7 +163,7 @@ function goTo(target: string) {
     openLesson(lesson);
   } else if (lab) {
     engine.teleport(lab.kind);
-  } else if (REALM_BY_ID.has(target as RealmId) || target === 'hub') {
+  } else if (REALM_BY_ID.has(target as RealmId) || target === 'hub' || target === 'playground') {
     engine.teleport(target);
   } else if (target === 'forge') {
     engine.teleport('neural');
@@ -188,10 +198,19 @@ function wire(e: Engine) {
     else if (s.kind === 'lesson') openLesson(LESSON_BY_ID.get(s.lessonId!)!);
     else if (s.kind === 'lab') openLab(s.lab as LabKind);
     else if (s.kind === 'flock') openFlock();
+    else if (s.kind === 'kiosk') openChallenges();
+  });
+  e.on('needCredits', (need, have) => {
+    toast('Not enough block credits', `That needs ${need} ⚡ and you have ${have}. Press Q (or the ⚡ button) to earn more with a quick quiz, maths or code challenge.`, 'error', 5000);
+  });
+  e.on('cursor', (free) => {
+    hud.cursor.hidden = !free;
+    root!.classList.toggle('free-cursor', free);
+    if (free) hud.start.hidden = true;
   });
   e.on('lock', (locked) => {
     root!.classList.toggle('locked', locked);
-    if (!locked && !panel && !hud.map.open && !isTouch && !stopTour && !root!.classList.contains('photo')) showStart(false);
+    if (!locked && !e.freeCursor && !panel && !hud.map.open && !isTouch && !stopTour && !root!.classList.contains('photo')) showStart(false);
   });
   e.on('hotbar', () => renderHotbar(e));
   e.on('fly', (on) => { hud.fly.hidden = !on; });
@@ -238,9 +257,10 @@ function wire(e: Engine) {
       if (panel) { closePanel(); return; }
     }
     if (typing || panel) return;
-    if (ev.code === 'KeyM' && !ev.repeat) {
+    if (ev.code === 'KeyM' && !ev.shiftKey && !ev.repeat) {
       if (hud.map.open) hud.map.close(); else openMap();
     }
+    if (ev.code === 'KeyQ' && !ev.repeat && !hud.map.open) openChallenges();
   });
 }
 
@@ -282,6 +302,7 @@ function showStart(help: boolean) {
             h('li', null, h('kbd', null, 'WASD'), ' move · ', h('kbd', null, 'Mouse'), ' look · ', h('kbd', null, 'Space'), ' jump / swim (double-tap to fly)'),
             h('li', null, h('kbd', null, 'E'), ' open lesson or lab · ', h('kbd', null, 'G'), ' guide · ', h('kbd', null, 'M'), ' map · ', h('kbd', null, 'B'), ' build · ', h('kbd', null, 'H'), ' hub'),
             h('li', null, h('kbd', null, 'V'), ' third-person camera · ', h('kbd', null, 'P'), ' photo mode · ', h('kbd', null, '1–9'), ' pick block'),
+            h('li', null, h('kbd', null, 'Q'), ' earn block credits · ', h('kbd', null, 'Shift+M'), ' switch to a normal mouse cursor (and back)'),
             h('li', null, h('kbd', null, 'Left click'), ' break (or paint in the Cathedral) · ', h('kbd', null, 'Right click'), ' place · ', h('kbd', null, 'Esc'), ' free the mouse'),
           ),
       h('div', { class: 'cta-row' },
@@ -343,7 +364,7 @@ function closePanel(resume = true) {
   panel.el.remove();
   panel = null;
   if (resume && root && !root.hidden) {
-    if (isTouch) hud.start.hidden = true;
+    if (isTouch || engine?.freeCursor) hud.start.hidden = true;
     else showStart(false);
   }
 }
@@ -384,9 +405,21 @@ function lookAtPad(realm: RealmId) {
 
 function openBuilder() {
   const view = builderView({
-    onBuild: (ops) => engine?.build(ops) ?? 0,
+    onBuild: (ops, shapes) => engine?.build(ops, shapes) ?? { blocks: 0, shapes: 0, cost: 0 },
+    onEarn: () => openChallenges(),
     onUndo: () => engine?.undoBuild() ?? 0,
   });
+  openPanel(view, true);
+}
+
+function openChallenges(tab?: 'quiz' | 'math' | 'code') {
+  const view = challengeView({
+    onReward: () => {
+      audio.success();
+      const p = engine?.player.pos;
+      if (p && engine) engine.celebrate(p.x, p.y + 5, p.z, undefined, 1);
+    },
+  }, tab);
   openPanel(view, true);
 }
 
@@ -477,6 +510,7 @@ function openMap() {
       h('div', { class: 'lesson-actions' },
         h('button', { type: 'button', class: 'map-hub', onclick: () => teleport('hub') }, '✦ Teleport to the Hub'),
         h('button', { type: 'button', class: 'btn', onclick: () => { hud.map.close(); startTour(); } }, '🎥 Cinematic tour'),
+        h('button', { type: 'button', class: 'btn', onclick: () => teleport('playground') }, '🏗 Your Playground'),
       ),
       h('h3', null, '🔬 Live AI labs'),
       h('div', { class: 'map-labs' }, LAB_SITES.map((l) =>

@@ -157,6 +157,21 @@ export const HUB_PORTALS: HubPortal[] = REALM_SITES.map((s) => ({
   angle: s.angle,
 }));
 
+/**
+ * The Playground: a big, empty, flat desert plot east of the hub, between the
+ * Data and Model labs, where learners build whatever they like.
+ */
+const PLAY_DISTANCE = 116;
+export const PLAYGROUND = {
+  x: HUB.x + PLAY_DISTANCE,
+  z: HUB.z,
+  radius: 32,
+  /** Arrive on the west (hub-side) edge, looking across the plot. */
+  spawn: { x: HUB.x + PLAY_DISTANCE - 28 + 0.5, z: HUB.z + 0.5, yaw: yawTowards(HUB.x + PLAY_DISTANCE - 28, HUB.z, HUB.x + PLAY_DISTANCE, HUB.z) },
+  /** Welcome kiosk: earn block credits here. */
+  kiosk: { x: HUB.x + PLAY_DISTANCE - 26, z: HUB.z - 4 },
+};
+
 // Spawn between two portal rings, behind a flower planter, looking at the fountain and spire.
 const SPAWN_ANGLE = Math.PI / 3;
 const spawnX = Math.round(HUB.x + Math.cos(SPAWN_ANGLE) * 14);

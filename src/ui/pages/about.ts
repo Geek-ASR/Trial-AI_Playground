@@ -22,7 +22,7 @@ export function aboutPage(): Page {
         h('tbody', null,
           row('W A S D / arrows', 'Move'), row('Mouse', 'Look (click the world to capture the mouse)'), row('Space', 'Jump · double-tap to fly'),
           row('Shift', 'Sprint · descend while flying'), row('F', 'Toggle flying'), row('E', 'Open the nearest lesson or lab console'),
-          row('Left / right click', 'Break / place block'), row('1–9 · scroll', 'Choose a block'), row('B', 'Code Builder'), row('M', 'Map, labs & teleport'), row('G', 'Nova guides you to your next lesson'), row('V', 'First / third person'), row('P', 'Photo mode'), row('H', 'Back to the Hub'), row('Esc', 'Release the mouse / close panels'),
+          row('Left / right click', 'Break / place block'), row('1–9 · scroll', 'Choose a block'), row('B', 'Code Builder'), row('M', 'Map, labs & teleport'), row('G', 'Nova guides you to your next lesson'), row('V', 'First / third person'), row('P', 'Photo mode'), row('Q', 'Earn block credits (quizzes, maths, code)'), row('Shift + M', 'Switch between mouse-look and a normal cursor'), row('H', 'Back to the Hub'), row('Esc', 'Release the mouse / close panels'),
         ),
       ),
       h('h2', null, 'Your data'),

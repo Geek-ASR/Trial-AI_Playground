@@ -3,7 +3,7 @@ import type { RealmId } from '../curriculum/types';
 import { buildLabStructures } from '../sims/structures';
 import { B, isSolid, type BlockId } from './blocks';
 import {
-  CHUNK, GROUND, HUB, HUB_PORTALS, LAB_RADIUS, LAB_SITES, PAD_HALF, REALM_RADIUS, REALM_SITES, STATIONS, SX, SY, SZ,
+  CHUNK, GROUND, HUB, HUB_PORTALS, LAB_RADIUS, LAB_SITES, PAD_HALF, PLAYGROUND, REALM_RADIUS, REALM_SITES, STATIONS, SX, SY, SZ,
   WATER_LEVEL,
 } from './layout';
 import { computeAllLight, relightBox, type VoxelGrid } from './lighting';
@@ -263,6 +263,7 @@ export class World implements VoxelGrid {
     this.buildHub();
     for (const site of REALM_SITES) this.buildRealm(site);
     buildLabStructures(this);
+    this.buildPlayground();
     for (const s of STATIONS) this.buildStation(s.x, s.y, s.z, s.kind === 'forge' ? B.CRYSTAL : B.BEACON);
     this.decorate(n2, n3);
   }
@@ -327,6 +328,7 @@ export class World implements VoxelGrid {
     flatten(HUB.x, HUB.z, HUB.radius, 14);
     for (const s of REALM_SITES) flatten(s.x, s.z, REALM_RADIUS, 14);
     for (const l of LAB_SITES) flatten(l.x, l.z, LAB_RADIUS, 14);
+    flatten(PLAYGROUND.x, PLAYGROUND.z, PLAYGROUND.radius, 16);
     for (let c = 0; c < SX * SZ; c++) heights[c] = heights[c] * (1 - pull[c]) + GROUND * pull[c];
 
     // 3. Fill columns.
@@ -427,6 +429,7 @@ export class World implements VoxelGrid {
       const lab = LAB_SITES.find((l) => l.realm === s.id)!;
       out.push([s.x, s.z, lab.x, lab.z]);
     }
+    out.push([HUB.x, HUB.z, PLAYGROUND.x, PLAYGROUND.z]);
     return out;
   }
 
@@ -434,7 +437,8 @@ export class World implements VoxelGrid {
     const insidePlaza = (x: number, z: number) =>
       Math.hypot(x - HUB.x, z - HUB.z) < HUB.radius ||
       REALM_SITES.some((s) => Math.hypot(x - s.x, z - s.z) < REALM_RADIUS) ||
-      LAB_SITES.some((l) => Math.hypot(x - l.x, z - l.z) < LAB_RADIUS);
+      LAB_SITES.some((l) => Math.hypot(x - l.x, z - l.z) < LAB_RADIUS) ||
+      Math.hypot(x - PLAYGROUND.x, z - PLAYGROUND.z) < PLAYGROUND.radius;
     let lampCount = 0;
     for (const [ax, az, bx, bz] of this.roads()) {
       const len = Math.hypot(bx - ax, bz - az);
@@ -471,6 +475,7 @@ export class World implements VoxelGrid {
       Math.hypot(x - HUB.x, z - HUB.z) < HUB.radius + pad ||
       REALM_SITES.some((s) => Math.hypot(x - s.x, z - s.z) < REALM_RADIUS + pad) ||
       LAB_SITES.some((l) => Math.hypot(x - l.x, z - l.z) < LAB_RADIUS + pad) ||
+      Math.hypot(x - PLAYGROUND.x, z - PLAYGROUND.z) < PLAYGROUND.radius + pad ||
       this.nearRoad(x, z, pad + 2);
 
     for (let z = 2; z < SZ - 2; z++) {
@@ -702,6 +707,31 @@ export class World implements VoxelGrid {
         this.setRaw(x, y, z, floor(x, z, d));
         for (let yy = y + 1; yy <= y + clearAbove; yy++) this.setRaw(x, yy, z, B.AIR);
       }
+  }
+
+  // ---------------------------------------------------------------- playground
+
+  /** A big empty sand plot with a faint 8-block grid, lamps around the rim and a credits kiosk. */
+  private buildPlayground() {
+    const { x: cx, z: cz, radius: r } = PLAYGROUND;
+    this.disc(cx, cz, r, GROUND, (x, z, d) => {
+      if (d > r - 1.2) return B.QUARTZ;
+      if (d > r - 2.2) return B.SANDSTONE;
+      const gx = (x - cx) % 8 === 0, gz = (z - cz) % 8 === 0;
+      return gx || gz ? B.SANDSTONE : B.SAND;
+    }, 60);
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2 + Math.PI / 16;
+      const x = Math.round(cx + Math.cos(a) * (r - 1.5)), z = Math.round(cz + Math.sin(a) * (r - 1.5));
+      // Leave the western (road) entrance clear.
+      if (Math.cos(a) < -0.93) continue;
+      this.lampPost(x, GROUND + 1, z, 3, B.SANDSTONE);
+    }
+    const k = PLAYGROUND.kiosk;
+    this.setRaw(k.x, GROUND + 1, k.z, B.QUARTZ);
+    this.setRaw(k.x, GROUND + 2, k.z, B.GOLD);
+    this.protect(k.x, GROUND + 1, k.z);
+    this.protect(k.x, GROUND + 2, k.z);
   }
 
   // ---------------------------------------------------------------- hub, realms, stations
