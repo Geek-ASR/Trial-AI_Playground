@@ -113,7 +113,7 @@ export class SkySystem {
     const u = this.sky.material.uniforms;
     u.sunPosition.value.copy(this.sunDir);
     // A low sun gives a dimmer Preetham sky: open the exposure up at dawn and dusk.
-    u.uExposure.value = 0.075 + 0.45 * (1 - smooth(0.0, 0.3, e)) * smooth(-0.25, -0.02, e);
+    u.uExposure.value = (0.075 + 0.45 * (1 - smooth(0.0, 0.3, e)) * smooth(-0.25, -0.02, e)) * (1 - oc * 0.55);
     u.rayleigh.value = lerp(1.2, 3.2, 1 - smooth(0.0, 0.4, Math.abs(e))) + oc * 1.5;
     u.turbidity.value = lerp(2.6, 9, oc);
     u.mieCoefficient.value = lerp(0.004, 0.02, oc);
@@ -127,7 +127,7 @@ export class SkySystem {
     this.sun.position.set(fx + lightDir.x * 150, focus.y + lightDir.y * 150, fz + lightDir.z * 150);
     this.sun.target.updateMatrixWorld();
 
-    const sunStrength = smooth(-0.02, 0.18, e) * (1 - oc * 0.75);
+    const sunStrength = smooth(-0.02, 0.18, e) * (1 - oc * 0.9);
     const moonStrength = smooth(-0.05, -0.25, e) * (1 - oc * 0.8);
     if (moonUp) {
       this.sun.color.setRGB(0.55, 0.66, 1.0);
@@ -139,7 +139,7 @@ export class SkySystem {
     this.sun.intensity += this.lightning * 6;
 
     palette(AMBIENT, e, this.tmp);
-    this.tmp.lerp(C(0x6b7280), oc * 0.6).multiplyScalar(1 - oc * 0.3);
+    this.tmp.lerp(C(0x5b6272), oc * 0.7).multiplyScalar(1 - oc * 0.45);
     this.tmp.addScalar(this.lightning * 0.8);
     this.shared.uSkyAmbient.value.copy(this.tmp);
     this.hemi.color.copy(this.tmp).multiplyScalar(1.4);
@@ -147,7 +147,7 @@ export class SkySystem {
     this.hemi.intensity = 0.6 + this.daylight * 0.6;
 
     palette(FOG, e, this.fogColor);
-    this.fogColor.lerp(C(0x8a93a3).multiplyScalar(0.3 + this.daylight * 0.7), oc * 0.7);
+    this.fogColor.lerp(C(0x6c7482).multiplyScalar(0.25 + this.daylight * 0.55), oc * 0.85);
     this.fogColor.addScalar(this.lightning * 0.5);
     fog.color.copy(this.fogColor);
 
