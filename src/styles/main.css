@@ -362,6 +362,7 @@ body.playing #app { display: none; }
 /* ---------- world v2 HUD */
 .hud-clock { background: rgba(11, 13, 28, 0.72); backdrop-filter: blur(6px); border: 1px solid rgba(255, 255, 255, 0.12); color: #fff; border-radius: 9px; padding: 7px 11px; font: 600 0.85rem var(--mono); }
 .hud-fps { position: absolute; top: 56px; right: 12px; z-index: 5; background: rgba(11, 13, 28, 0.6); color: #cfe; font: 600 0.75rem var(--mono); padding: 3px 8px; border-radius: 6px; }
+@media (max-width: 720px) { .hud-fps { top: auto; bottom: 64px; right: auto; left: 12px; } }
 .hud-guide { position: absolute; left: 50%; top: 58px; transform: translateX(-50%); z-index: 6; max-width: min(760px, 92vw); background: rgba(11, 13, 28, 0.82); border: 1px solid rgba(126, 249, 255, 0.35); color: #fff; padding: 7px 12px; border-radius: 10px; font-size: 0.82rem; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .hud-guide span { color: var(--muted); }
 .mini-x { margin-left: auto; background: none; border: 1px solid var(--line); color: var(--text); border-radius: 6px; cursor: pointer; padding: 1px 7px; }
