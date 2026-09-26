@@ -40,8 +40,6 @@ You can create voxel structures as well as shapes such as spheres, cylinders, co
 
 The world itself includes multiple biomes, lighting, shadows, weather, water, a day/night cycle, ambient sound, flocking birds and an A* pathfinding guide.
 
-## Progress
-
 Complete lessons, quizzes and coding exercises to earn credits, XP, levels and badges.
 
 Progress is stored locally in the browser. No account is required.
