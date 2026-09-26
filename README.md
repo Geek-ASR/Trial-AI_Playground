@@ -24,24 +24,13 @@ There are also six interactive labs:
 - Embeddings
 - Q-Learning
 
-## Build and code
 
-You can implement algorithms such as softmax, k-means, attention, and Q-learning using Python or JavaScript.
-
-Python runs directly in the browser through Pyodide. Built-in tests check your solutions as you learn.
-
-There is also a Neural Forge for building and training small neural networks, and a 3D Function Lab for exploring mathematical functions, gradients, and optimisation.
-
-## Your own playground
 
 A separate sandbox lets you build structures using Blockly, Python, or JavaScript.
-
 You can create voxel structures as well as shapes such as spheres, cylinders, cones, domes and rings.
-
 The world itself includes multiple biomes, lighting, shadows, weather, water, a day/night cycle, ambient sound, flocking birds and an A* pathfinding guide.
 
 Complete lessons, quizzes and coding exercises to earn credits, XP, levels and badges.
-
 Progress is stored locally in the browser. No account is required.
 
 ## Tech
@@ -61,7 +50,6 @@ bash npm run build npm test npm run news npm run smoke
 ## Why I built it
 
 I wanted to experiment with a different way of teaching AI — making concepts something you can interact with rather than just read about.
-
 NeuralCraft started as a 3D simulation experiment and gradually grew into a larger interactive learning environment.
 
 ## Author
